@@ -22,6 +22,29 @@ const KEY_CONFIG: Record<string, { x: number; y: number; z: number }> = {
   '6': { x: 0.600, y: -0.050, z: 0.050 },
 };
 
+function speakFeedback(message: string): void {
+  if (!('speechSynthesis' in window)) return;
+  window.speechSynthesis.cancel();
+  window.speechSynthesis.speak(new SpeechSynthesisUtterance(message));
+}
+
+function commandSummary(command: VoiceCommand): string {
+  if (command.type === 'move_relative') return `move ${command.axis} by ${(command.value * 100).toFixed(0)} centimetres`;
+  if (command.type === 'goto') return 'move to the requested position';
+  if (command.type === 'goto_key') return `press key ${command.key}`;
+  if (command.type === 'rotate_joint') return `rotate joint ${command.joint} by ${command.degrees} degrees`;
+  if (command.type === 'joint_pose') return 'move to the requested six-joint pose';
+  if (command.type === 'reset') return 'reset the arm to home';
+  if (command.type === 'sequence') return `perform ${command.commands.length} steps`;
+  return 'an unknown command';
+}
+
+async function waitForMotionCompletion(pipeline: MotionPipeline): Promise<void> {
+  while (pipeline.isRunning) {
+    await new Promise<void>(resolve => window.setTimeout(resolve, 50));
+  }
+}
+
 export interface VoiceControlState {
   /** Most recent transcribed text */
   transcript: string;
@@ -74,15 +97,17 @@ export function useVoiceControl(pipeline: MotionPipeline | null): VoiceControlSt
   });
 
   // ── Execute a parsed command via the pipeline ───────────────────────
-  const executeCommand = useCallback(async (command: VoiceCommand) => {
+  const executeCommand = useCallback(async (command: VoiceCommand): Promise<boolean> => {
     const p = pipelineRef.current;
     if (!p) {
       setError('Motion pipeline not ready');
-      return;
+      return false;
     }
 
     setIsExecuting(true);
     setError(null);
+    speakFeedback(`I understood: ${commandSummary(command)}. Executing now.`);
+    let commandFailed = false;
 
     try {
       switch (command.type) {
@@ -95,6 +120,7 @@ export function useVoiceControl(pipeline: MotionPipeline | null): VoiceControlSt
           const result = p.jog(delta);
           if (!result.success) {
             setError(`Could not move: ${result.reason || 'unknown'}`);
+            commandFailed = true;
           }
           setLastCommand(`Move ${command.axis} ${(command.value * 1000).toFixed(0)}mm`);
           break;
@@ -105,6 +131,7 @@ export function useVoiceControl(pipeline: MotionPipeline | null): VoiceControlSt
           const result = p.moveToTarget(target, { duration: 600 });
           if (!result.success) {
             setError(`Could not reach target: ${result.reason || 'unknown'}`);
+            commandFailed = true;
           }
           setLastCommand(`Go to (${command.x.toFixed(3)}, ${command.y.toFixed(3)}, ${command.z.toFixed(3)})`);
           break;
@@ -114,6 +141,7 @@ export function useVoiceControl(pipeline: MotionPipeline | null): VoiceControlSt
           const config = KEY_CONFIG[String(command.key)];
           if (!config) {
             setError(`Key ${command.key} not found in config`);
+            commandFailed = true;
             break;
           }
           // Convert URDF (Z-up) to Three.js (Y-up): (x, z, -y)
@@ -121,18 +149,46 @@ export function useVoiceControl(pipeline: MotionPipeline | null): VoiceControlSt
           const result = p.moveToTarget(keyPos, { duration: 500 });
           if (!result.success) {
             setError(`Could not reach key ${command.key}: ${result.reason || 'unknown'}`);
+            commandFailed = true;
           }
           setLastCommand(`Go to key ${command.key}`);
           break;
         }
 
         case 'rotate_joint': {
+          const result = p.rotateJoint(command.joint - 1, THREE.MathUtils.degToRad(command.degrees));
+          if (!result.success) {
+            setError(`Could not rotate joint: ${result.reason || 'unknown'}`);
+            commandFailed = true;
+          }
+          setLastCommand(`Rotate joint ${command.joint} ${command.degrees} degrees`);
+          break;
           setError('Joint rotation via voice not yet implemented (use IK mode)');
           setLastCommand(`Rotate joint ${command.joint} ${command.degrees}° (not supported)`);
           break;
         }
 
+        case 'joint_pose': {
+          const angles = command.angles.map(angle => THREE.MathUtils.degToRad(angle));
+          const result = p.moveToJointPose(angles);
+          if (!result.success) {
+            setError(`Could not move to joint pose: ${result.reason || 'unknown'}`);
+            commandFailed = true;
+          }
+          setLastCommand(`Joint pose: ${command.angles.map(angle => angle.toFixed(0)).join(', ')} degrees`);
+          break;
+        }
+
         case 'reset': {
+          // Stop any partial movement, then command all joints back to zero.
+          p.cancel();
+          const result = p.reset();
+          if (!result.success) {
+            setError(`Could not reset: ${result.reason || 'unknown'}`);
+            commandFailed = true;
+          }
+          setLastCommand('Reset arm to home pose');
+          break;
           // Cancel any existing animation
           p.cancel();
           // We can't directly reset joints from here, but the ControlDashboard
@@ -143,12 +199,36 @@ export function useVoiceControl(pipeline: MotionPipeline | null): VoiceControlSt
 
         case 'unknown': {
           setError(command.explanation || 'Command not understood');
+          commandFailed = true;
           setLastCommand(`Unknown: ${command.explanation}`);
+          speakFeedback(command.explanation || 'I could not understand that command.');
+          break;
+        }
+        case 'sequence': {
+          for (const step of command.commands) {
+            const succeeded = await executeCommand(step);
+            if (!succeeded) {
+              commandFailed = true;
+              break;
+            }
+          }
+          setLastCommand(commandFailed
+            ? 'Voice plan stopped because a step failed'
+            : `Completed ${command.commands.length}-step voice plan`);
           break;
         }
       }
+      await waitForMotionCompletion(p);
+      if (commandFailed) {
+        speakFeedback(`${commandSummary(command)} could not be completed. Check the message for the safety or reachability reason.`);
+      } else if (command.type !== 'unknown') {
+        speakFeedback(`${commandSummary(command)} completed successfully.`);
+      }
+      return !commandFailed;
     } catch (e: any) {
       setError(e.message || 'Error executing command');
+      speakFeedback(`Command failed: ${e.message || 'an unexpected error occurred'}.`);
+      return false;
     } finally {
       setIsExecuting(false);
     }
@@ -162,7 +242,10 @@ export function useVoiceControl(pipeline: MotionPipeline | null): VoiceControlSt
     setError(null);
 
     try {
-      const result = await parseWithLLM(text);
+      const currentPosition = pipelineRef.current?.getEndEffectorPosition();
+      const result = await parseWithLLM(text, undefined, currentPosition ? {
+        currentPosition: { x: currentPosition.x, y: currentPosition.y, z: currentPosition.z },
+      } : undefined);
       setLastCommand(
         result.command.type !== 'unknown'
           ? `${text} → ${result.command.type}`

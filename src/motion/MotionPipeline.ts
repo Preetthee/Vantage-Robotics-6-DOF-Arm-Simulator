@@ -48,6 +48,11 @@ export class MotionPipeline {
     return this._running;
   }
 
+  /** Current stylus position, exposed for natural-language planning context. */
+  getEndEffectorPosition(): THREE.Vector3 {
+    return this.scene.getEEPosition();
+  }
+
   /**
    * Move the end-effector to an absolute world-space target, animated smoothly.
    * Returns false if the target is unreachable or if a previous animation is running.
@@ -60,21 +65,46 @@ export class MotionPipeline {
     if (this._running) {
       return { success: false, reason: 'Animation in progress' };
     }
+    if (!this.isSafeTarget(targetPos)) {
+      return { success: false, reason: 'Target is outside the configured safe workspace' };
+    }
+
+    // The solver evaluates candidates by applying them to the live scene. Save
+    // the actual pose *before* solving so the visual animation can start from
+    // where the arm really is, rather than from the solver's final iteration.
+    const currentAngles = this.readCurrentAngles(jointNames);
 
     options?.onStart?.();
 
     // 1. Solve IK for the target (with optional orientation)
     const result = this.scene.solveIK(targetPos, options?.targetOrientation);
     if (result.angles.length === 0) {
+      this.applyAngles(jointNames, currentAngles);
       return { success: false, reason: 'IK solver returned no angles' };
     }
 
-    // 2. Read current angles from the scene for interpolation start
-    const currentAngles = this.readCurrentAngles(jointNames);
+    // Restore the pose that was visible when the command began. Without this,
+    // solveIK leaves the arm at the target and the following animation has no
+    // distance to interpolate.
+    this.applyAngles(jointNames, currentAngles);
 
-    // 3. Animate from current to target
+    // Animate from the original pose to the IK result.
     this.animateAngles(currentAngles, result.angles, options?.duration ?? 350, options?.onComplete);
     return { success: true };
+  }
+
+  /** Promise form for planners that must wait for one safe move to finish. */
+  moveToTargetAsync(targetPos: THREE.Vector3, options?: MotionOptions): Promise<MoveResult> {
+    return new Promise(resolve => {
+      const result = this.moveToTarget(targetPos, {
+        ...options,
+        onComplete: () => {
+          options?.onComplete?.();
+          resolve({ success: true });
+        },
+      });
+      if (!result.success) resolve(result);
+    });
   }
 
   /**
@@ -122,6 +152,57 @@ export class MotionPipeline {
     this._running = false;
   }
 
+  /** Smoothly return every controllable joint to its URDF zero position. */
+  reset(duration: number = 500): MoveResult {
+    if (this._running) return { success: false, reason: 'Animation in progress' };
+
+    const jointNames = this.getJointNames();
+    if (jointNames.length === 0) return { success: false, reason: 'No joints loaded' };
+
+    this.animateAngles(this.readCurrentAngles(jointNames), new Array(jointNames.length).fill(0), duration);
+    return { success: true };
+  }
+
+  /** Rotate one controllable joint by a relative amount. */
+  rotateJoint(index: number, deltaRadians: number, duration: number = 400): MoveResult {
+    if (this._running) return { success: false, reason: 'Animation in progress' };
+
+    const jointNames = this.getJointNames();
+    if (index < 0 || index >= jointNames.length) return { success: false, reason: 'Joint not found' };
+
+    const start = this.readCurrentAngles(jointNames);
+    const end = [...start];
+    const limit = (this.scene.getJoints().get(jointNames[index]) as any)?.limit;
+    end[index] = THREE.MathUtils.clamp(
+      end[index] + deltaRadians,
+      limit?.lower ?? -Math.PI,
+      limit?.upper ?? Math.PI,
+    );
+    this.animateAngles(start, end, duration);
+    return { success: true };
+  }
+
+  /** Move all joints to an explicit, validated joint-angle pose. */
+  moveToJointPose(angles: number[], duration: number = 600): MoveResult {
+    if (this._running) return { success: false, reason: 'Animation in progress' };
+    const jointNames = this.getJointNames();
+    if (angles.length !== jointNames.length || angles.some(angle => !Number.isFinite(angle))) {
+      return { success: false, reason: `Expected ${jointNames.length} finite joint angles` };
+    }
+
+    for (let index = 0; index < jointNames.length; index++) {
+      const limit = (this.scene.getJoints().get(jointNames[index]) as any)?.limit;
+      const lower = limit?.lower ?? -Math.PI;
+      const upper = limit?.upper ?? Math.PI;
+      if (angles[index] < lower || angles[index] > upper) {
+        return { success: false, reason: `Joint ${index + 1} is outside its safe limit` };
+      }
+    }
+
+    this.animateAngles(this.readCurrentAngles(jointNames), angles, duration);
+    return { success: true };
+  }
+
   // ─── Private ───────────────────────────────────────────
 
   private readCurrentAngles(jointNames: string[]): number[] {
@@ -132,6 +213,22 @@ export class MotionPipeline {
       if (!axis || axis.lengthSq() <= 0) return 0;
       return extractAngle(obj.quaternion, axis);
     });
+  }
+
+  private applyAngles(jointNames: string[], angles: number[]): void {
+    angles.forEach((angle, index) => {
+      if (index < jointNames.length) this.scene.setJointAngle(jointNames[index], angle);
+    });
+    this.setStateAngles(angles);
+  }
+
+  /** Deterministic workspace gate used by every command source, including AI. */
+  private isSafeTarget(target: THREE.Vector3): boolean {
+    const withinBounds =
+      target.x >= -1.5 && target.x <= 1.5 &&
+      target.y >= -0.05 && target.y <= 1.8 &&
+      target.z >= -1.5 && target.z <= 1.5;
+    return withinBounds && target.length() <= 1.5;
   }
 
   private animateAngles(

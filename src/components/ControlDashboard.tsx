@@ -21,19 +21,47 @@ const KEY_CONFIG = {
   "6": { x: 0.600, y: -0.050, z: 0.050 },
 } as const;
 
+// The keypad uses a Z-up URDF frame. After conversion to the Y-up scene the
+// stylus should point down onto a key, not approach it from underneath.
+const DOWNWARD_ORIENTATION = new THREE.Quaternion().setFromUnitVectors(
+  new THREE.Vector3(0, 0, 1),
+  new THREE.Vector3(0, -1, 0),
+);
+const KEY_HOVER_CLEARANCE = 0.04;
+
 /** Format radians to degrees for display */
 function radToDeg(rad: number): string {
   return `${(rad * 180 / Math.PI).toFixed(1)}°`;
 }
 
 export default function ControlDashboard({ sceneRef }: { sceneRef: React.RefObject<Scene3DHandle | null> }) {
-  const { state, updateJointTarget, updateJointAngle, updateJointAngles, setMode, setStatus, resetPose, setIKTarget } = useArmState();
+  const { state, updateJointTarget, updateJointAngle, updateJointAngles, setMode, setStatus, setEndEffectorPose, resetPose, setIKTarget } = useArmState();
 
   // ── Refs to avoid stale closures over state.joints ─────
   const getJointNamesRef = useRef(() => state.joints.map(j => j.name));
   getJointNamesRef.current = () => state.joints.map(j => j.name);
   const setStateAnglesRef = useRef(updateJointAngles);
   setStateAnglesRef.current = updateJointAngles;
+
+  // Keep the dashboard pose readout in sync with the Three.js scene. The
+  // context ignores unchanged poses, so this remains inexpensive while idle.
+  useEffect(() => {
+    const updateEndEffectorPose = () => {
+      const scene = sceneRef.current;
+      if (!scene || scene.getJoints().size === 0) return;
+
+      const position = scene.getEEPosition();
+      const orientation = new THREE.Euler().setFromQuaternion(scene.getEEOrientation(), 'XYZ');
+      setEndEffectorPose(
+        [position.x, position.y, position.z],
+        [orientation.x, orientation.y, orientation.z],
+      );
+    };
+
+    updateEndEffectorPose();
+    const timer = window.setInterval(updateEndEffectorPose, 100);
+    return () => window.clearInterval(timer);
+  }, [sceneRef, setEndEffectorPose]);
 
   // ── Build motion pipeline (only rebuild when scene handle changes) ─────
   const pipeline = useMemo(() => {
@@ -138,23 +166,39 @@ export default function ControlDashboard({ sceneRef }: { sceneRef: React.RefObje
     if (!pos) return;
 
     const targetPos = new THREE.Vector3(pos.x, pos.z, -pos.y);
-    scene.updateTargetMarker(targetPos);
+    const hoverPos = targetPos.clone();
+    hoverPos.y += KEY_HOVER_CLEARANCE;
+    scene.updateTargetMarker(hoverPos);
     setIKTarget({ position: [targetPos.x, targetPos.y, targetPos.z] });
     setActiveKey(keyId);
     setStatus('running');
 
-    const result = pipeline.moveToTarget(targetPos, {
-      duration: 500,
+    // Always enter a fixed key from above: first move to a safe hover point,
+    // then make a short vertical descent to the key surface.
+    const result = pipeline.moveToTarget(hoverPos, {
+      duration: 550,
+      targetOrientation: DOWNWARD_ORIENTATION,
       onComplete: () => {
-        const finalPos = scene.getEEPosition();
-        const error = finalPos.distanceTo(targetPos);
-        setStatus(error < 0.01 ? 'reached' : 'idle');
+        scene.updateTargetMarker(targetPos);
+        const descend = pipeline.moveToTarget(targetPos, {
+          duration: 300,
+          targetOrientation: DOWNWARD_ORIENTATION,
+          onComplete: () => {
+            const finalPos = scene.getEEPosition();
+            const error = finalPos.distanceTo(targetPos);
+            setStatus(error < 0.01 ? 'reached' : 'idle');
 
-        // Clear marker after a moment
-        setTimeout(() => {
-          scene.updateTargetMarker(null);
+            setTimeout(() => {
+              scene.updateTargetMarker(null);
+              setActiveKey(null);
+            }, 2000);
+          },
+        });
+
+        if (!descend.success) {
+          setStatus('error');
           setActiveKey(null);
-        }, 2000);
+        }
       },
     });
 

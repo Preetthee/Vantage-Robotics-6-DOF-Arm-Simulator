@@ -406,23 +406,29 @@ export function solveIK(
 
     if (!result) break;
 
-    // Apply deltas
+    // Apply deltas with joint limit enforcement
     for (let i = 0; i < angles.length; i++) {
-      angles[i] += result.deltas[i];
-      // Clamp to joint limits from URDF limits
+      const newAngle = angles[i] + result.deltas[i];
       const lower = joints[i].lower;
       const upper = joints[i].upper;
       if (lower !== undefined && upper !== undefined) {
-        angles[i] = Math.max(lower, Math.min(upper, angles[i]));
+        if (newAngle < lower || newAngle > upper) {
+          // Joint hit its limit — zero this delta so the error
+          // redistributes to other joints in subsequent iterations
+          angles[i] = Math.max(lower, Math.min(upper, newAngle));
+        } else {
+          angles[i] = newAngle;
+        }
+      } else {
+        angles[i] = newAngle;
       }
     }
 
     iterations = iter + 1;
 
-    // Check convergence
-    if (result.error < posTol) {
-      break;
-    }
+    // Check convergence by position distance (separate from orientation error)
+    const posDist = target.distanceTo(eePos);
+    if (posDist < posTol) break;
   }
 
   // Final apply

@@ -70,7 +70,13 @@ export function ArmStateProvider({ children }: { children: ReactNode }) {
 
   const setEndEffectorPose = useCallback(
     (pos: [number, number, number], ori: [number, number, number]) => {
-      setState(prev => ({ ...prev, endEffectorPosition: pos, endEffectorOrientation: ori }));
+      setState(prev => {
+        const unchanged = [...pos, ...ori].every((value, index) => {
+          const previous = index < 3 ? prev.endEffectorPosition[index] : prev.endEffectorOrientation[index - 3];
+          return Math.abs(value - previous) < 0.0001;
+        });
+        return unchanged ? prev : { ...prev, endEffectorPosition: pos, endEffectorOrientation: ori };
+      });
     },
     [],
   );

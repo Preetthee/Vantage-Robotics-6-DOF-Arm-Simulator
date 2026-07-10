@@ -129,7 +129,7 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ urdfPath, urdfContent
 
     // Ground grid helper (industrial floor look)
     const gridHelper = new THREE.GridHelper(10, 20, 0x2a3a5a, 0x1a2a4a);
-    gridHelper.position.y = -0.1;
+    gridHelper.position.y = 0;
     scene.add(gridHelper);
 
     // Ground plane for shadows
@@ -137,7 +137,7 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ urdfPath, urdfContent
     const groundMat = new THREE.ShadowMaterial({ opacity: 0.4, color: 0x000000 });
     const ground = new THREE.Mesh(groundGeo, groundMat);
     ground.rotation.x = -Math.PI / 2;
-    ground.position.y = -0.1;
+    ground.position.y = 0;
     ground.receiveShadow = true;
     scene.add(ground);
 
@@ -199,7 +199,7 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ urdfPath, urdfContent
       mouseRef.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
 
       raycasterRef.current.setFromCamera(mouseRef.current, camera);
-      const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.1);
+      const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
       const point = new THREE.Vector3();
       if (raycasterRef.current.ray.intersectPlane(groundPlane, point)) {
         onGroundClickRef.current(point.clone());
@@ -566,8 +566,8 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ urdfPath, urdfContent
 
     // Vertical dashed line from ground to target
     const linePoints = [
-      new THREE.Vector3(position.x, -0.1, position.z),
-      new THREE.Vector3(position.x, -0.1 + 0.02, position.z),
+      new THREE.Vector3(position.x, 0, position.z),
+      new THREE.Vector3(position.x, 0 + 0.02, position.z),
       position.clone(),
     ];
     const lineGeo = new THREE.BufferGeometry().setFromPoints(linePoints);
@@ -587,7 +587,15 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ urdfPath, urdfContent
   /** Run IK solver to reach a target world position with optional orientation */
   const solveIK = useCallback((targetPos: THREE.Vector3, targetOrientation?: THREE.Quaternion): import('../ik/iksolver').IKSolution => {
     const joints = jointsRef.current;
-    const jointNames = Array.from(joints.keys());
+    // Keep the solver order identical to the controllable-joint order used by
+    // MotionPipeline. Including fixed joints shifts the returned angles and
+    // makes a target command rotate the wrong links.
+    const jointNames = Array.from(joints.entries())
+      .filter(([_, joint]) => {
+        const type = (joint as any).jointType;
+        return type === 'revolute' || type === 'continuous' || type === 'prismatic';
+      })
+      .map(([name]) => name);
     console.log('[IK-SCENE] jointNames:', jointNames);
     if (jointNames.length === 0) {
       return { angles: [], error: Infinity, iterations: 0, converged: false };

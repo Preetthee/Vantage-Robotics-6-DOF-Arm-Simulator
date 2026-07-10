@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img" aria-labelledby="title desc">
+  <title id="title">6-DOF Wi-Fi robot arm electrical schematic</title>
+  <desc id="desc">A proof-of-concept schematic with a 12 volt supply, fused 6 volt servo rail, 5 volt logic rail, ESP32 Wi-Fi controller, PCA9685 PWM driver, and six servos.</desc>
+  <style>
+    .box{fill:#152238;stroke:#65b7ff;stroke-width:2;rx:12}.power{fill:#2a2038;stroke:#ffb066;stroke-width:2;rx:12}.servo{fill:#18352d;stroke:#78d5a1;stroke-width:2;rx:10}.t{font:600 16px Arial;fill:#eaf2ff}.s{font:13px Arial;fill:#c4d2e8}.w{stroke:#e7edf7;stroke-width:3;fill:none}.r{stroke:#ff8a65;stroke-width:4;fill:none}.b{stroke:#68b9ff;stroke-width:3;fill:none}.g{stroke:#79d69b;stroke-width:3;fill:none}.d{stroke:#a8b5c8;stroke-width:2;stroke-dasharray:7 5;fill:none}
+  </style>
+  <rect width="1200" height="760" fill="#0b1220"/>
+  <text x="40" y="42" class="t" font-size="24">Vantage 6-DOF Arm - Phase 5 PoC Electrical Schematic</text>
+  <text x="40" y="68" class="s">All grounds are common. Size the servo supply, fuse, wiring, and connector ratings for the selected servo stall current.</text>
+
+  <rect x="45" y="155" width="155" height="100" class="power"/><text x="68" y="190" class="t">12 V DC Supply</text><text x="65" y="215" class="s">Battery / PSU</text><text x="65" y="235" class="s">20 A minimum PoC</text>
+  <rect x="270" y="155" width="145" height="100" class="power"/><text x="302" y="190" class="t">Main Fuse</text><text x="298" y="215" class="s">20 A, near supply</text>
+  <path d="M200 205H270" class="r"/><text x="218" y="195" class="s">+12 V</text>
+  <path d="M45 245H25V650H1160" class="w"/><text x="37" y="675" class="s">COMMON GND RETURN</text>
+
+  <rect x="485" y="110" width="175" height="120" class="power"/><text x="515" y="148" class="t">6 V Buck Regulator</text><text x="510" y="174" class="s">High-current servo rail</text><text x="510" y="197" class="s">V+ / 20 A rated</text>
+  <rect x="485" y="300" width="175" height="120" class="box"/><text x="520" y="340" class="t">5 V Buck Regulator</text><text x="515" y="365" class="s">Logic rail, 2 A</text><text x="515" y="388" class="s">ESP32 VIN / USB 5 V</text>
+  <path d="M415 205H455V170H485" class="r"/><path d="M455 205V360H485" class="r"/>
+
+  <rect x="735" y="290" width="190" height="140" class="box"/><text x="790" y="327" class="t">ESP32 DevKit</text><text x="755" y="354" class="s">Wi-Fi control link</text><text x="755" y="378" class="s">GPIO 21: I2C SDA</text><text x="755" y="401" class="s">GPIO 22: I2C SCL</text>
+  <path d="M660 360H735" class="r"/><path d="M735 415H700V650" class="w"/>
+  <path d="M825 290V250" class="d"/><text x="842" y="266" class="s">802.11 Wi-Fi</text>
+
+  <rect x="735" y="105" width="190" height="125" class="box"/><text x="780" y="142" class="t">PCA9685 PWM Driver</text><text x="755" y="168" class="s">VCC: 3.3 V logic</text><text x="755" y="191" class="s">V+: dedicated 6 V rail</text><text x="755" y="214" class="s">CH0 - CH5: servo PWM</text>
+  <path d="M660 170H735" class="r"/><path d="M825 230V290" class="b"/><text x="835" y="264" class="s">SDA/SCL</text>
+
+  <g>
+    <rect x="1010" y="90" width="145" height="65" class="servo"/><text x="1045" y="120" class="t">Servo J1</text><text x="1035" y="140" class="s">PWM CH0, 6 V</text>
+    <rect x="1010" y="180" width="145" height="65" class="servo"/><text x="1045" y="210" class="t">Servo J2</text><text x="1035" y="230" class="s">PWM CH1, 6 V</text>
+    <rect x="1010" y="270" width="145" height="65" class="servo"/><text x="1045" y="300" class="t">Servo J3</text><text x="1035" y="320" class="s">PWM CH2, 6 V</text>
+    <rect x="1010" y="360" width="145" height="65" class="servo"/><text x="1045" y="390" class="t">Servo J4</text><text x="1035" y="410" class="s">PWM CH3, 6 V</text>
+    <rect x="1010" y="450" width="145" height="65" class="servo"/><text x="1045" y="480" class="t">Servo J5</text><text x="1035" y="500" class="s">PWM CH4, 6 V</text>
+    <rect x="1010" y="540" width="145" height="65" class="servo"/><text x="1045" y="570" class="t">Servo J6</text><text x="1035" y="590" class="s">PWM CH5, 6 V</text>
+  </g>
+  <path d="M925 168H970V122H1010M970 122V572H1010M970 212H1010M970 302H1010M970 392H1010M970 482H1010" class="g"/>
+  <path d="M660 170H695V70H970V105" class="r"/><text x="675" y="92" class="s">6 V V+</text>
+  <text x="48" y="710" class="s">Safety notes: emergency stop in the 12 V path; do not power servos from the ESP32; add bulk capacitance at the 6 V rail; use a separate regulated supply sized for worst-case servo current.</text>
+</svg>

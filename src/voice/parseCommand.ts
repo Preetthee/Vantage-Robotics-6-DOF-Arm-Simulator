@@ -40,8 +40,20 @@ export interface RotateJoint {
   degrees: number;
 }
 
+/** Explicit 6-joint target pose. Angles are supplied in degrees. */
+export interface JointPose {
+  type: 'joint_pose';
+  angles: number[];
+}
+
 export interface ResetArm {
   type: 'reset';
+}
+
+/** An ordered plan produced by the optional agentic voice layer. */
+export interface CommandSequence {
+  type: 'sequence';
+  commands: Array<MoveRelative | GotoAbsolute | GotoKey | RotateJoint | JointPose | ResetArm>;
 }
 
 export interface UnknownCommand {
@@ -55,7 +67,9 @@ export type VoiceCommand =
   | GotoAbsolute
   | GotoKey
   | RotateJoint
+  | JointPose
   | ResetArm
+  | CommandSequence
   | UnknownCommand;
 
 // ─── System prompt ──────────────────────────────────────────────────
@@ -74,9 +88,9 @@ Available commands (output ONLY valid JSON — no markdown, no code fences):
    {"type":"goto","x":<metres>,"y":<metres>,"z":<metres>}
    The key panel is at x=0.5-0.6, y=0.04-0.06, z=0.05.
 
-3. Go to a key on the test panel:
-   {"type":"goto_key","key":<1-6>}
-   Examples: "go to key 3" or "press key 5"
+3. Go to a test-panel position:
+   Use the supplied panel coordinates and output a direct goto object.
+   Example: "go to position 3" -> {"type":"goto","x":0.600,"y":0.050,"z":-0.050}
 
 4. Rotate a specific joint:
    {"type":"rotate_joint","joint":<1-6>,"degrees":<signed degrees>}
@@ -86,7 +100,19 @@ Available commands (output ONLY valid JSON — no markdown, no code fences):
    {"type":"reset"}
    "reset the arm", "go home"
 
+6. Multi-step instruction (only when multiple actions are explicit):
+   {"type":"sequence","commands":[<commands from 1-5>]}
+   Example: "move up 2cm, then rotate base 15 degrees" ->
+   {"type":"sequence","commands":[{"type":"move_relative","axis":"y","value":0.02},{"type":"rotate_joint","joint":1,"degrees":15}]}
+
+7. Explicit joint pose (only when all six joint angles are explicitly requested):
+   {"type":"joint_pose","angles":[J1,J2,J3,J4,J5,J6]}
+   Angles are degrees and must be six finite numbers.
+
 IMPORTANT RULES:
+- Do not output goto_key. Convert references to a panel position/key directly into a goto with its listed world coordinates.
+- For relative requests, use the current end-effector position supplied in the context to calculate an absolute goto target whenever possible.
+- If the target is ambiguous and no safe coordinate can be inferred, return unknown and ask for the missing coordinate; do not write an explanation before the JSON.
 - Value for move_relative is in METRES (not cm). Convert cm to metres by dividing by 100.
 - If the user says "forward" it means negative Z (into the scene), "back" means positive Z.
 - If the user says something unclear, output: {"type":"unknown","explanation":"<why you couldn't understand>"}
@@ -103,7 +129,15 @@ export interface ParseResult {
  * Send the transcribed speech to Fireworks AI and return a parsed command.
  * Throws on network errors or invalid responses.
  */
-export async function parseWithLLM(transcript: string, signal?: AbortSignal): Promise<ParseResult> {
+export async function parseWithLLM(
+  transcript: string,
+  signal?: AbortSignal,
+  context?: { currentPosition: { x: number; y: number; z: number } },
+): Promise<ParseResult> {
+  const position = context?.currentPosition;
+  const runtimeContext = position
+    ? `Live scene context (Three.js world coordinates, Y-up): end effector is at (${position.x.toFixed(3)}, ${position.y.toFixed(3)}, ${position.z.toFixed(3)}). Test panel positions: key/position 1=(0.500,0.050,-0.050), 2=(0.550,0.050,-0.050), 3=(0.600,0.050,-0.050), 4=(0.500,0.050,0.050), 5=(0.550,0.050,0.050), 6=(0.600,0.050,0.050).`
+    : 'No live pose is available. Do not infer a relative target.';
   const response = await fetch(`${FIREWORKS_BASE_URL}/chat/completions`, {
     method: 'POST',
     headers: {
@@ -116,11 +150,12 @@ export async function parseWithLLM(transcript: string, signal?: AbortSignal): Pr
         { role: 'system', content: SYSTEM_PROMPT },
         {
           role: 'user',
-          content: transcript,
+          content: `${runtimeContext}\n\nOperator instruction: ${transcript}`,
         },
       ],
       temperature: 0.1,
       max_tokens: 300,
+      response_format: { type: 'json_object' },
     }),
     signal,
   });
@@ -151,7 +186,15 @@ export async function parseWithLLM(transcript: string, signal?: AbortSignal): Pr
         throw new Error(`Could not parse LLM response as JSON:\n${content}`);
       }
     } else {
-      throw new Error(`Could not parse LLM response as JSON:\n${content}`);
+      const objectMatch = content.match(/\{[\s\S]*\}/);
+      if (!objectMatch) {
+        throw new Error('The language model did not return a JSON command. Please repeat the command with a target or coordinate.');
+      }
+      try {
+        parsed = JSON.parse(objectMatch[0]);
+      } catch {
+        throw new Error('The language model returned invalid JSON. Please repeat the command.');
+      }
     }
   }
 
@@ -198,9 +241,33 @@ export async function parseWithLLM(transcript: string, signal?: AbortSignal): Pr
       }
       break;
     }
+    case 'joint_pose': {
+      if (!Array.isArray(command.angles) || command.angles.length !== 6 || command.angles.some(angle => !Number.isFinite(angle))) {
+        return { command: { type: 'unknown', explanation: 'A joint pose must contain exactly six finite angles in degrees' }, raw: content };
+      }
+      break;
+    }
     case 'reset':
     case 'unknown':
       break;
+    case 'sequence': {
+      if (!Array.isArray(command.commands) || command.commands.length === 0 || command.commands.length > 8) {
+        return { command: { type: 'unknown', explanation: 'A sequence must contain 1 to 8 commands' }, raw: content };
+      }
+      const invalidStep = command.commands.some(step => {
+        if (!step || !step.type) return true;
+        if (step.type === 'move_relative') return !['x', 'y', 'z'].includes(step.axis) || !Number.isFinite(step.value);
+        if (step.type === 'goto') return !Number.isFinite(step.x) || !Number.isFinite(step.y) || !Number.isFinite(step.z);
+        if (step.type === 'goto_key') return ![1, 2, 3, 4, 5, 6].includes(step.key);
+        if (step.type === 'rotate_joint') return step.joint < 1 || step.joint > 6 || !Number.isFinite(step.degrees);
+        if (step.type === 'joint_pose') return !Array.isArray(step.angles) || step.angles.length !== 6 || step.angles.some(angle => !Number.isFinite(angle));
+        return step.type !== 'reset';
+      });
+      if (invalidStep) {
+        return { command: { type: 'unknown', explanation: 'Sequence contains an invalid or unsupported step' }, raw: content };
+      }
+      break;
+    }
     default:
       return { command: { type: 'unknown', explanation: `Unrecognised command type: ${(command as any).type}` }, raw: content };
   }
