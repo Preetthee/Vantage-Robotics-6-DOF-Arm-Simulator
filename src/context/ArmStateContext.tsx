@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useCallback, type ReactNode } from 'react';
-import type { ArmState, ControlMode, JointData } from '../types';
+import type { ArmState, ControlMode, IKTarget, JointData } from '../types';
 
 const DEFAULT_ARM_STATE: ArmState = {
   joints: [
@@ -14,17 +14,20 @@ const DEFAULT_ARM_STATE: ArmState = {
   endEffectorOrientation: [0, 0, 0],
   status: 'idle',
   mode: 'manual',
+  ikTarget: null,
 };
 
 interface ArmStateContextValue {
   state: ArmState;
   updateJointAngle: (index: number, angle: number) => void;
   updateJointTarget: (index: number, target: number) => void;
+  updateJointAngles: (angles: number[]) => void;
   initializeJoints: (joints: JointData[]) => void;
   setMode: (mode: ControlMode) => void;
   setStatus: (status: ArmState['status']) => void;
   setEndEffectorPose: (pos: [number, number, number], ori: [number, number, number]) => void;
   resetPose: () => void;
+  setIKTarget: (target: IKTarget | null) => void;
 }
 
 const ArmStateContext = createContext<ArmStateContextValue | null>(null);
@@ -44,6 +47,15 @@ export function ArmStateProvider({ children }: { children: ReactNode }) {
     setState(prev => {
       const joints = [...prev.joints];
       joints[index] = { ...joints[index], target };
+      return { ...prev, joints };
+    });
+  }, []);
+
+  const updateJointAngles = useCallback((angles: number[]) => {
+    setState(prev => {
+      const joints = prev.joints.map((j, i) =>
+        i < angles.length ? { ...j, angle: angles[i] } : j
+      );
       return { ...prev, joints };
     });
   }, []);
@@ -81,17 +93,23 @@ export function ArmStateProvider({ children }: { children: ReactNode }) {
     }));
   }, []);
 
+  const setIKTarget = useCallback((target: IKTarget | null) => {
+    setState(prev => ({ ...prev, ikTarget: target }));
+  }, []);
+
   return (
     <ArmStateContext.Provider
       value={{
         state,
         updateJointAngle,
         updateJointTarget,
+        updateJointAngles,
         initializeJoints,
         setMode,
         setStatus,
         setEndEffectorPose,
         resetPose,
+        setIKTarget,
       }}
     >
       {children}

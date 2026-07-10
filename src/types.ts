@@ -15,6 +15,7 @@ export interface ArmState {
   endEffectorOrientation: [number, number, number]; // Euler angles
   status: 'idle' | 'running' | 'reached' | 'error';
   mode: ControlMode;
+  ikTarget: IKTarget | null;
 }
 
 export type ControlMode = 'manual' | 'ik' | 'playback' | 'voice';

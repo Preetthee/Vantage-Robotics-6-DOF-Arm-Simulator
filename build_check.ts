@@ -1,0 +1,1 @@
+Run: cd /project && npx vite build 2>&1

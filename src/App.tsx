@@ -1,6 +1,7 @@
-import { Suspense, lazy, useRef, useState } from "react";
+import { Suspense, lazy, useRef, useState, useCallback } from "react";
 import ControlDashboard from "./components/ControlDashboard";
 import type { Scene3DHandle } from "./components/Scene3D";
+import { useArmState } from "./context/ArmStateContext";
 
 const Scene3D = lazy(() => import("./components/Scene3D"));
 
@@ -11,6 +12,14 @@ function App() {
   const [dragOver, setDragOver] = useState(false);
 
   const sceneRef = useRef<Scene3DHandle>(null);
+  const { setIKTarget } = useArmState();
+
+  const handleGroundClick = useCallback((position: THREE.Vector3) => {
+    setIKTarget({
+      position: { x: position.x, y: position.y, z: position.z },
+      orientation: undefined,
+    });
+  }, [setIKTarget]);
 
   const handleFile = (file: File) => {
     if (!file.name.endsWith('.urdf')) {
@@ -62,9 +71,9 @@ function App() {
           }
         >
           {urdfContent ? (
-            <Scene3D ref={sceneRef} urdfContent={urdfContent} urdfFileName={urdfFileName || undefined} />
+            <Scene3D ref={sceneRef} urdfContent={urdfContent} urdfFileName={urdfFileName || undefined} onGroundClick={handleGroundClick} />
           ) : (
-            <Scene3D ref={sceneRef} />
+            <Scene3D ref={sceneRef} onGroundClick={handleGroundClick} />
           )}
         </Suspense>
 
