@@ -1,0 +1,23 @@
+{
+  "configurations": [
+    {
+      "name": "PlatformIO ESP32",
+      "compilerPath": "C:/Users/fahim/.platformio/packages/toolchain-xtensa-esp32/bin/xtensa-esp32-elf-gcc.exe",
+      "cStandard": "c17",
+      "cppStandard": "c++17",
+      "intelliSenseMode": "windows-gcc-x64",
+      "compileCommands": "${workspaceFolder}/compile_commands.json",
+      "includePath": [
+        "${workspaceFolder}/src",
+        "${workspaceFolder}/include",
+        "${workspaceFolder}/.pio/libdeps/esp32dev/ESP32Servo/src",
+        "${workspaceFolder}/.pio/libdeps/esp32dev/ESP32Servo/src/esp32",
+        "${workspaceFolder}/.pio/packages/framework-arduinoespressif32/cores/esp32",
+        "${workspaceFolder}/.pio/packages/framework-arduinoespressif32/variants/esp32",
+        "${workspaceFolder}/.pio/packages/framework-arduinoespressif32/libraries/WiFi/src",
+        "${workspaceFolder}/.pio/packages/framework-arduinoespressif32/libraries/WebServer/src"
+      ]
+    }
+  ],
+  "version": 4
+}
