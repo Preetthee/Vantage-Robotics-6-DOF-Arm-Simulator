@@ -92,7 +92,11 @@ export class MotionPipeline {
     const currentPos = this.scene.getEEPosition();
     const targetPos = currentPos.clone().add(delta);
 
+    console.log('[JOG] delta:', delta.toArray().map(v => v.toFixed(4)), 'currentEE:', currentPos.toArray().map(v => v.toFixed(4)), 'target:', targetPos.toArray().map(v => v.toFixed(4)));
+
     const result = this.scene.solveIK(targetPos);
+    console.log('[JOG] IK result:', { angles: result.angles.map(a => (a * 180 / Math.PI).toFixed(1)), error: result.error.toFixed(6), iterations: result.iterations, converged: result.converged });
+
     if (result.angles.length === 0) {
       return { success: false, reason: 'IK solver returned no angles' };
     }

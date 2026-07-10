@@ -191,6 +191,96 @@ function dampingFactor(J: number[][], maxDamping: number = 0.1): number {
 }
 
 /**
+ * Damped pseudoinverse: J⁺ ≈ Jᵀ(J Jᵀ + λ²I)⁻¹
+ * Adds a damping term λ² to the diagonal of JJt so the matrix is always
+ * non-singular, making the IK robust near singularities.
+ */
+function dampedPseudoinverse(J: number[][], lambda: number): number[][] | null {
+  const rows = J.length;       // 6
+  const cols = J[0].length;     // N
+  const lambdaSq = lambda * lambda;
+
+  // Compute J J^T + λ²I (6×6)
+  const JJt: number[][] = Array.from({ length: rows }, () => new Array(rows).fill(0));
+  for (let i = 0; i < rows; i++) {
+    for (let k = 0; k < rows; k++) {
+      let sum = 0;
+      for (let j = 0; j < cols; j++) {
+        sum += J[i][j] * J[k][j];
+      }
+      JJt[i][k] = sum;
+    }
+    // Add damping to the diagonal
+    JJt[i][i] += lambdaSq;
+  }
+
+  // Invert the damped JJt (should be well-conditioned thanks to λ²)
+  const inv = invertMatrix6(JJt);
+  if (!inv) return null;
+
+  // J^T × inv(JJt + λ²I) → N×6
+  const Jpinv: number[][] = Array.from({ length: cols }, () => new Array(rows).fill(0));
+  for (let i = 0; i < cols; i++) {
+    for (let k = 0; k < rows; k++) {
+      let sum = 0;
+      for (let j = 0; j < rows; j++) {
+        sum += J[j][i] * inv[j][k];
+      }
+      Jpinv[i][k] = sum;
+    }
+  }
+
+  return Jpinv;
+}
+
+/**
+ * Compute Δq = J⁺ × error from a raw pseudoinverse matrix,
+ * with delta clamping.
+ */
+function stepFromPinv(
+  Jpinv: number[][],
+  error6: number[],
+  n: number,
+  stepSize: number,
+): { deltas: number[]; error: number } | null {
+  const deltas = new Array(n).fill(0);
+  for (let i = 0; i < n; i++) {
+    let sum = 0;
+    for (let k = 0; k < 6; k++) {
+      sum += Jpinv[i][k] * error6[k];
+    }
+    deltas[i] = sum * stepSize;
+  }
+
+  clampDeltas(deltas);
+
+  return {
+    deltas,
+    error: vectorNorm6(error6),
+  };
+}
+
+/** Clamp joint deltas in-place to prevent wild swings. */
+function clampDeltas(deltas: number[], maxDelta: number = 0.5): void {
+  let maxAbs = 0;
+  for (let i = 0; i < deltas.length; i++) {
+    const abs = Math.abs(deltas[i]);
+    if (abs > maxAbs) maxAbs = abs;
+  }
+  if (maxAbs > maxDelta) {
+    const scale = maxDelta / maxAbs;
+    for (let i = 0; i < deltas.length; i++) {
+      deltas[i] *= scale;
+    }
+  }
+}
+
+/** Euclidean norm of a 6-element vector. */
+function vectorNorm6(v: number[]): number {
+  return Math.sqrt(v[0] ** 2 + v[1] ** 2 + v[2] ** 2 + v[3] ** 2 + v[4] ** 2 + v[5] ** 2);
+}
+
+/**
  * Perform one IK iteration step.
  * Returns the joint angle deltas to apply.
  */
@@ -227,17 +317,17 @@ function ikStep(
     error6 = [posError.x, posError.y, posError.z, 0, 0, 0];
   }
 
-  const errorNorm = Math.sqrt(
-    error6[0] ** 2 + error6[1] ** 2 + error6[2] ** 2 +
-    error6[3] ** 2 + error6[4] ** 2 + error6[5] ** 2,
-  );
+  // Damped pseudoinverse: J⁺ ≈ Jᵀ(J Jᵀ + λ²I)⁻¹
+  // The damping handles singularities (e.g. fully-extended arm) gracefully.
 
-  // Damped pseudoinverse: J⁺ = Jᵀ(J Jᵀ + λ²I)⁻¹
-  // For simplicity, we implement as: pseudoinverse but add damping to JJt
-  // We'll use the basic pseudoinverse with step clamping
-
-  const Jpinv = pseudoinverse(J);
-  if (!Jpinv) return null;
+  const lambda = dampingFactor(J, 0.05);
+  const Jpinv = dampedPseudoinverse(J, lambda);
+  if (!Jpinv) {
+    // Fallback: pure pseudoinverse (may fail at singularity)
+    const raw = pseudoinverse(J);
+    if (!raw) return null;
+    return stepFromPinv(raw, error6, n, stepSize);
+  }
 
   // Δq = J⁺ × error
   const deltas = new Array(n).fill(0);
@@ -249,21 +339,9 @@ function ikStep(
     deltas[i] = sum * stepSize;
   }
 
-  // Clamp deltas to prevent wild swings
-  const maxDelta = 0.5; // radians per step
-  let maxAbs = 0;
-  for (let i = 0; i < n; i++) {
-    const abs = Math.abs(deltas[i]);
-    if (abs > maxAbs) maxAbs = abs;
-  }
-  if (maxAbs > maxDelta) {
-    const scale = maxDelta / maxAbs;
-    for (let i = 0; i < n; i++) {
-      deltas[i] *= scale;
-    }
-  }
+  clampDeltas(deltas);
 
-  return { deltas, error: errorNorm };
+  return { deltas, error: vectorNorm6(error6) };
 }
 
 /**

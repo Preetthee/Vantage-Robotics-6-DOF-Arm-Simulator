@@ -428,6 +428,13 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ urdfPath, urdfContent
         ee = child;
       }
     });
+    if (ee) {
+      const p = new THREE.Vector3();
+      ee.getWorldPosition(p);
+      console.log('[EE] found:', ee.name, 'pos:', p.toArray().map(v => v.toFixed(4)));
+    } else {
+      console.warn('[EE] No stylus_tip or stylus found in scene');
+    }
     return ee;
   }, []);
 
@@ -537,6 +544,7 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ urdfPath, urdfContent
   const solveIK = useCallback((targetPos: THREE.Vector3): import('../ik/iksolver').IKSolution => {
     const joints = jointsRef.current;
     const jointNames = Array.from(joints.keys());
+    console.log('[IK-SCENE] jointNames:', jointNames);
     if (jointNames.length === 0) {
       return { angles: [], error: Infinity, iterations: 0, converged: false };
     }
@@ -545,6 +553,8 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ urdfPath, urdfContent
     const jointInfo: JointInfo[] = jointNames.map((name, idx) => {
       const jointObj = joints.get(name)!;
       const axis = ((jointObj as any).axis as THREE.Vector3)?.clone() || new THREE.Vector3(0, 0, 1);
+      const jt = (jointObj as any).jointType;
+      console.log('[IK-SCENE] joint', name, 'axis:', axis.toArray().map(v => v.toFixed(4)), 'type:', jt);
       return {
         object: jointObj,
         axis,
@@ -552,6 +562,9 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ urdfPath, urdfContent
         stateIndex: idx,
       };
     });
+
+    const eePos = getEEPosition();
+    console.log('[IK-SCENE] EE pos:', eePos.toArray().map(v => v.toFixed(4)), 'target:', targetPos.toArray().map(v => v.toFixed(4)));
 
     return ikSolve(jointInfo, targetPos, {
       maxIterations: 100,
