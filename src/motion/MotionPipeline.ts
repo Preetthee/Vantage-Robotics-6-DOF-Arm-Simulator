@@ -13,6 +13,8 @@ import type { Scene3DHandle } from '../components/Scene3D';
 export interface MotionOptions {
   /** Animation duration in ms (default 350) */
   duration?: number;
+  /** Target orientation for the end-effector (quaternion) */
+  targetOrientation?: THREE.Quaternion;
   onStart?: () => void;
   onProgress?: (t: number) => void;
   onComplete?: () => void;
@@ -61,8 +63,8 @@ export class MotionPipeline {
 
     options?.onStart?.();
 
-    // 1. Solve IK for the target
-    const result = this.scene.solveIK(targetPos);
+    // 1. Solve IK for the target (with optional orientation)
+    const result = this.scene.solveIK(targetPos, options?.targetOrientation);
     if (result.angles.length === 0) {
       return { success: false, reason: 'IK solver returned no angles' };
     }

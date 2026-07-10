@@ -15,8 +15,8 @@ export interface Scene3DHandle {
   getEEPosition: () => THREE.Vector3;
   /** Get the end-effector world orientation */
   getEEOrientation: () => THREE.Quaternion;
-  /** Run inverse kinematics to reach a target position */
-  solveIK: (targetPos: THREE.Vector3) => import('../ik/iksolver').IKSolution;
+  /** Run inverse kinematics to reach a target position with optional orientation */
+  solveIK: (targetPos: THREE.Vector3, targetOrientation?: THREE.Quaternion) => import('../ik/iksolver').IKSolution;
   /** Show/hide the target position marker in the scene */
   updateTargetMarker: (position: THREE.Vector3 | null) => void;
   /** Highlight a test-panel key by ID (0 = none/clear). The key will glow with a pulsing emissive. */
@@ -57,6 +57,8 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ urdfPath, urdfContent
   const keyMeshRefs = useRef<Map<number, { mesh: THREE.Mesh; mat: THREE.MeshStandardMaterial }>>(new Map());
   /** The key currently glowing/active during autonomous playback */
   const activeKeyIdRef = useRef<number | null>(null);
+  /** Yellow highlight ring around the active key */
+  const activeKeyRingRef = useRef<THREE.Mesh | null>(null);
   /** Accumulated time for pulse animation */
   const pulseTimeRef = useRef<number>(0);
 
@@ -143,14 +145,23 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ urdfPath, urdfContent
     const animate = () => {
       animFrameRef.current = requestAnimationFrame(animate);
 
-      // Pulse the active key's emissive intensity
+      // Pulse the active key's emissive intensity and ring
       if (activeKeyIdRef.current !== null) {
         const entry = keyMeshRefs.current.get(activeKeyIdRef.current);
         if (entry) {
           const t = pulseTimeRef.current;
-          // Smooth sine pulse: 0.2 → 0.8 → 0.2
+          // Smooth sine pulse: 0.3 → 1.0 → 0.3
           const pulse = 0.3 + 0.7 * (0.5 + 0.5 * Math.sin(t * 5));
           entry.mat.emissiveIntensity = pulse;
+        }
+        // Pulse the yellow ring
+        const ring = activeKeyRingRef.current;
+        if (ring) {
+          const t = pulseTimeRef.current;
+          const opacity = 0.3 + 0.5 * (0.5 + 0.5 * Math.sin(t * 4 + 1));
+          (ring.material as THREE.MeshBasicMaterial).opacity = opacity;
+          const scale = 1 + 0.05 * Math.sin(t * 3);
+          ring.scale.set(scale, scale, scale);
         }
       }
       pulseTimeRef.current += 0.016; // ~60fps
@@ -264,16 +275,16 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ urdfPath, urdfContent
         keyEntries.forEach(([id, pos]) => {
           const keyNum = parseInt(id, 10);
           const { x, y, z } = pos;
-          const size = 0.02;
+          const size = 0.03;
           const geo = new THREE.BoxGeometry(size, size, size);
           const mat = new THREE.MeshStandardMaterial({
             color: keyNum === 1 ? 0x4488ff : 0x3388cc,
             metalness: 0.2,
             roughness: 0.3,
             transparent: true,
-            opacity: 0.55,
+            opacity: 0.85,
             emissive: keyNum === 1 ? 0x4488ff : 0x2266aa,
-            emissiveIntensity: keyNum === 1 ? 0.5 : 0.15,
+            emissiveIntensity: keyNum === 1 ? 1.2 : 0.6,
           });
           const mesh = new THREE.Mesh(geo, mat);
           mesh.position.set(x, y, z);
@@ -306,7 +317,7 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ urdfPath, urdfContent
           });
           const sprite = new THREE.Sprite(spriteMat);
           sprite.position.set(x, y + 0.015, z);
-          sprite.scale.set(0.02, 0.02, 1);
+          sprite.scale.set(0.05, 0.05, 1);
           panelGroup.add(sprite);
         });
 
@@ -573,8 +584,8 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ urdfPath, urdfContent
     targetLineRef.current = line;
   }, []);
 
-  /** Run IK solver to reach a target world position */
-  const solveIK = useCallback((targetPos: THREE.Vector3): import('../ik/iksolver').IKSolution => {
+  /** Run IK solver to reach a target world position with optional orientation */
+  const solveIK = useCallback((targetPos: THREE.Vector3, targetOrientation?: THREE.Quaternion): import('../ik/iksolver').IKSolution => {
     const joints = jointsRef.current;
     const jointNames = Array.from(joints.keys());
     console.log('[IK-SCENE] jointNames:', jointNames);
@@ -582,27 +593,32 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ urdfPath, urdfContent
       return { angles: [], error: Infinity, iterations: 0, converged: false };
     }
 
-    // Build JointInfo array from the current joint map
+    // Build JointInfo array with joint limits from URDF
     const jointInfo: JointInfo[] = jointNames.map((name, idx) => {
       const jointObj = joints.get(name)!;
       const axis = ((jointObj as any).axis as THREE.Vector3)?.clone() || new THREE.Vector3(0, 0, 1);
+      const limit = (jointObj as any).limit || {};
       const jt = (jointObj as any).jointType;
-      console.log('[IK-SCENE] joint', name, 'axis:', axis.toArray().map(v => v.toFixed(4)), 'type:', jt);
       return {
         object: jointObj,
         axis,
         angle: anglesRef.current.get(name) || 0,
         stateIndex: idx,
+        lower: limit.lower,
+        upper: limit.upper,
       };
     });
 
     const eePos = getEEPosition();
     console.log('[IK-SCENE] EE pos:', eePos.toArray().map(v => v.toFixed(4)), 'target:', targetPos.toArray().map(v => v.toFixed(4)));
 
+    const useOri = !!targetOrientation;
     return ikSolve(jointInfo, targetPos, {
       maxIterations: 100,
       positionTolerance: 0.001,
       stepSize: 0.2,
+      useOrientation: useOri,
+      targetOrientation: targetOrientation,
       getEEPosition,
       getEEOrientation,
       applyAngles: (angles: number[]) => applyAnglesDirect(jointNames, angles),
@@ -625,6 +641,14 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ urdfPath, urdfContent
     // Clear previous key pulse state
     if (activeKeyIdRef.current !== null) {
       resetAllKeyEmissive();
+      // Remove previous ring
+      if (activeKeyRingRef.current) {
+        const scene = sceneRef.current;
+        if (scene) scene.remove(activeKeyRingRef.current);
+        activeKeyRingRef.current?.geometry?.dispose();
+        (activeKeyRingRef.current.material as THREE.Material)?.dispose();
+        activeKeyRingRef.current = null;
+      }
     }
     activeKeyIdRef.current = keyId;
     pulseTimeRef.current = 0;
@@ -632,6 +656,24 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ urdfPath, urdfContent
       const entry = keyMeshRefs.current.get(keyId);
       if (entry) {
         entry.mat.emissiveIntensity = 0.8; // immediate bright highlight
+
+        // Create a yellow ring around the key
+        const scene = sceneRef.current;
+        if (scene) {
+          const ringGeo = new THREE.RingGeometry(0.045, 0.06, 32);
+          const ringMat = new THREE.MeshBasicMaterial({
+            color: 0xffcc00,
+            side: THREE.DoubleSide,
+            transparent: true,
+            opacity: 0.6,
+          });
+          const ring = new THREE.Mesh(ringGeo, ringMat);
+          ring.position.copy(entry.mesh.position);
+          ring.position.y += 0.001;
+          ring.rotation.x = -Math.PI / 2;
+          scene.add(ring);
+          activeKeyRingRef.current = ring;
+        }
       }
     }
   }, [resetAllKeyEmissive]);
@@ -658,6 +700,13 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ urdfPath, urdfContent
   const clearHighlights = useCallback(() => {
     activeKeyIdRef.current = null;
     resetAllKeyEmissive();
+    if (activeKeyRingRef.current) {
+      const scene = sceneRef.current;
+      if (scene) scene.remove(activeKeyRingRef.current);
+      activeKeyRingRef.current?.geometry?.dispose();
+      (activeKeyRingRef.current.material as THREE.Material)?.dispose();
+      activeKeyRingRef.current = null;
+    }
   }, [resetAllKeyEmissive]);
 
   useImperativeHandle(ref, () => ({

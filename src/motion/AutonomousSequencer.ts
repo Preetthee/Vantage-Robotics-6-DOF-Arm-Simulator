@@ -1,13 +1,19 @@
 /**
  * AutonomousSequencer — motion planning engine for autonomous PIN entry.
  *
- * Given a 6-digit PIN (digits 1-6), generates approach→touch→retract
+ * Given a 6-digit PIN (digits 1-6), generates hover→touch→retract
  * waypoints for each key and executes them through MotionPipeline.
  * Validates each press against the target key coordinate and reports
  * per-key results.
  *
+ * Strategy: Move to 3cm ABOVE the key (forces an "arm above key" IK
+ * solution), then descend directly to the key surface. The 3cm clearance
+ * prevents the arm from sagging below the key surface due to joint limits.
+ * The IK solver is given a downward-pointing orientation constraint so the
+ * tool points toward the keypad (not upward).
+ *
  * State machine:
- *   IDLE → RUNNING → (for each key: APPROACHING → TOUCHING → VALIDATING → RETRACTING) → COMPLETE
+ *   IDLE → RUNNING → (for each key: HOVERING → TOUCHING → VALIDATING → RETRACTING) → COMPLETE
  *                        ↓
  *                     ABORTED (any phase)
  */
@@ -19,7 +25,7 @@ import { MotionPipeline } from './MotionPipeline';
 // ─── Types ────────────────────────────────────────────────────────────
 
 export type SequencerStatus = 'idle' | 'running' | 'aborted' | 'complete';
-export type KeyPhase = 'approaching' | 'touching' | 'validating' | 'retracting' | 'idle';
+export type KeyPhase = 'hovering' | 'touching' | 'validating' | 'retracting' | 'idle';
 
 export interface KeyResult {
   keyId: number;
@@ -42,6 +48,37 @@ interface KeyConfigEntry {
   z: number;
 }
 
+// ─── Constants ─────────────────────────────────────────────────────────
+
+/** 3cm clearance above the key surface for the hover position */
+const HOVER_CLEARANCE = 0.03;
+
+/**
+ * Downward-pointing orientation quaternion.
+ * In URDF the tool's default direction is +z; in Three.js (Y-up)
+ * "down" is -y. This quaternion rotates +z to -y.
+ */
+const DOWNWARD_ORI = new THREE.Quaternion().setFromUnitVectors(
+  new THREE.Vector3(0, 0, 1),
+  new THREE.Vector3(0, -1, 0),
+);
+
+/** Tolerance for validating a key press (metres) */
+const TOUCH_TOLERANCE = 0.005;
+
+/** Duration (ms) the tool holds on the key to simulate a press */
+const HOLD_DURATION = 200;
+
+// ─── Helpers ───────────────────────────────────────────────────────────
+
+/** Format joint angles in degrees for logging */
+function logJointAngles(label: string, angles: number[], jointNames: string[]): void {
+  const degStr = angles
+    .map((a, i) => `${jointNames[i] || `j${i}`}=${(a * 180 / Math.PI).toFixed(1)}°`)
+    .join('  ');
+  console.log(`[SEQUENCER] ${label}: ${degStr}`);
+}
+
 // ─── Sequencer ─────────────────────────────────────────────────────────
 
 export class AutonomousSequencer {
@@ -57,6 +94,9 @@ export class AutonomousSequencer {
   private _pin = '';
   private _aborted = false;
   private _holdTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Height (in Three.js world Y) at which the arm hovered — reused for retract */
+  private _hoverHeight = 0;
 
   constructor(deps: {
     pipeline: MotionPipeline;
@@ -103,7 +143,7 @@ export class AutonomousSequencer {
     this._currentKeyIndex = 0;
     this._results = [];
     this._status = 'running';
-    this._phase = 'approaching';
+    this._phase = 'hovering';
     this.emitStatus();
 
     this.executeNextKey();
@@ -137,9 +177,24 @@ export class AutonomousSequencer {
     return new THREE.Vector3(entry.x, entry.z, -entry.y);
   }
 
-  /** Compute approach position: 30mm above the key surface in Three.js world Y */
-  private approachPos(worldPos: THREE.Vector3): THREE.Vector3 {
-    return worldPos.clone().add(new THREE.Vector3(0, 0.03, 0));
+  /** Log current joint angles from the scene */
+  private logCurrentJoints(label: string): void {
+    const jointNames = Array.from(this.scene.getJoints().keys());
+    const angles = jointNames.map(name => {
+      const obj = this.scene.getJoints().get(name);
+      if (!obj) return 0;
+      const axis = (obj as any).axis;
+      if (!axis || axis.lengthSq() <= 0) return 0;
+      // Extract signed angle from quaternion
+      const q = obj.quaternion;
+      const sinHalf = Math.sqrt(1 - q.w * q.w);
+      if (sinHalf < 1e-6) return 0;
+      let angle = 2 * Math.atan2(sinHalf, q.w);
+      const qAxis = new THREE.Vector3(q.x, q.y, q.z).normalize();
+      if (qAxis.dot(axis.clone().normalize()) < 0) angle = -angle;
+      return angle;
+    });
+    logJointAngles(label, angles, jointNames);
   }
 
   /** Move to the next key in the sequence, or finish if done */
@@ -170,32 +225,45 @@ export class AutonomousSequencer {
     this.scene.highlightKey(keyId);
 
     const keyWorldPos = this.urdfToWorld(config);
-    this.executeApproach(keyWorldPos);
+    this.executeHover(keyWorldPos);
   }
 
-  /** Phase 1: Move to approach position above the key */
-  private executeApproach(keyWorldPos: THREE.Vector3): void {
+  /**
+   * Phase 1: Move to 3cm ABOVE the key surface.
+   * This forces an "arm above key" IK solution, preventing the arm
+   * from sagging below the key surface.
+   */
+  private executeHover(keyWorldPos: THREE.Vector3): void {
     if (this._aborted) return;
 
-    const approachPos = this.approachPos(keyWorldPos);
-    this._phase = 'approaching';
+    const hoverPos = keyWorldPos.clone();
+    hoverPos.y += HOVER_CLEARANCE;
+    this._hoverHeight = hoverPos.y;
+    this._phase = 'hovering';
     this.emitStatus();
-    this.scene.updateTargetMarker(approachPos);
+    this.scene.updateTargetMarker(hoverPos);
 
-    const result = this.pipeline.moveToTarget(approachPos, {
+    this.logCurrentJoints(`HOVER start (key ${this._currentKeyIndex + 1})`);
+
+    const result = this.pipeline.moveToTarget(hoverPos, {
       duration: 400,
+      targetOrientation: DOWNWARD_ORI,
       onComplete: () => {
         if (this._aborted) return;
+        this.logCurrentJoints(`HOVER end (key ${this._currentKeyIndex + 1})`);
         this.executeTouch(keyWorldPos);
       },
     });
 
     if (!result.success) {
-      this.recordUnreachable(result.reason || 'IK solver failed (approach)');
+      this.recordUnreachable(result.reason || 'IK solver failed (hover)');
     }
   }
 
-  /** Phase 2: Descend to touch the key surface */
+  /**
+   * Phase 2: Descend directly to the key surface.
+   * This is a short, reachable move since we're already 3cm above.
+   */
   private executeTouch(keyWorldPos: THREE.Vector3): void {
     if (this._aborted) return;
 
@@ -203,10 +271,15 @@ export class AutonomousSequencer {
     this.emitStatus();
     this.scene.updateTargetMarker(keyWorldPos);
 
+    this.logCurrentJoints(`TOUCH start (key ${this._currentKeyIndex + 1})`);
+
     const result = this.pipeline.moveToTarget(keyWorldPos, {
       duration: 400,
+      targetOrientation: DOWNWARD_ORI,
       onComplete: () => {
         if (this._aborted) return;
+
+        this.logCurrentJoints(`TOUCH end (key ${this._currentKeyIndex + 1})`);
 
         // Hold 200ms to simulate a press, then validate and retract
         this._holdTimer = setTimeout(() => {
@@ -214,7 +287,7 @@ export class AutonomousSequencer {
           if (this._aborted) return;
 
           this.executeValidate(keyWorldPos);
-        }, 200);
+        }, HOLD_DURATION);
       },
     });
 
@@ -223,7 +296,7 @@ export class AutonomousSequencer {
     }
   }
 
-  /** Phase 2.5: Validate end-effector position against target key */
+  /** Phase 3: Validate end-effector position against target key */
   private executeValidate(keyWorldPos: THREE.Vector3): void {
     if (this._aborted) return;
 
@@ -232,13 +305,18 @@ export class AutonomousSequencer {
 
     const eePos = this.scene.getEEPosition();
     const distance = eePos.distanceTo(keyWorldPos);
-    const success = distance <= 0.005; // 5mm tolerance
+    const success = distance <= TOUCH_TOLERANCE;
 
     this._results.push({
       keyId: parseInt(this._pin[this._currentKeyIndex], 10),
       status: success ? 'success' : 'failure',
       errorMm: distance * 1000,
     });
+
+    console.log(
+      `[SEQUENCER] Key ${this._currentKeyIndex + 1}: ${success ? 'SUCCESS' : 'FAILURE'} ` +
+      `(error: ${(distance * 1000).toFixed(2)}mm)`,
+    );
 
     // Flash the key with the result colour (green=success, red=failure)
     const keyId = parseInt(this._pin[this._currentKeyIndex], 10);
@@ -248,17 +326,19 @@ export class AutonomousSequencer {
     this.executeRetract(keyWorldPos);
   }
 
-  /** Phase 3: Retract back to the approach position */
+  /** Phase 4: Retract back to the hover position (3cm above the key) */
   private executeRetract(keyWorldPos: THREE.Vector3): void {
     if (this._aborted) return;
 
-    const approachPos = this.approachPos(keyWorldPos);
+    const retractPos = keyWorldPos.clone();
+    retractPos.y = this._hoverHeight;
     this._phase = 'retracting';
     this.emitStatus();
-    this.scene.updateTargetMarker(approachPos);
+    this.scene.updateTargetMarker(retractPos);
 
-    const result = this.pipeline.moveToTarget(approachPos, {
+    const result = this.pipeline.moveToTarget(retractPos, {
       duration: 400,
+      targetOrientation: DOWNWARD_ORI,
       onComplete: () => {
         if (this._aborted) return;
 
@@ -270,7 +350,7 @@ export class AutonomousSequencer {
 
     if (!result.success) {
       // Retract failed — log but continue to next key
-      console.warn('[Sequencer] Retract failed — moving to next key:', result.reason);
+      console.warn('[SEQUENCER] Retract failed — moving to next key:', result.reason);
       this._currentKeyIndex++;
       this.executeNextKey();
     }
@@ -280,7 +360,7 @@ export class AutonomousSequencer {
   private recordUnreachable(reason: string): void {
     if (this._aborted) return;
 
-    console.warn('[Sequencer] Unreachable key:', reason);
+    console.warn('[SEQUENCER] Unreachable key:', reason);
 
     this._results.push({
       keyId: parseInt(this._pin[this._currentKeyIndex], 10),

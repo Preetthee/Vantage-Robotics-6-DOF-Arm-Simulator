@@ -6,8 +6,10 @@ import { MotionPipeline } from '../motion/MotionPipeline';
 import { AutonomousSequencer } from '../motion/AutonomousSequencer';
 import type { KeyPhase, KeyResult, SequencerStatus } from '../motion/AutonomousSequencer';
 import { useKeyboardControl } from '../hooks/useKeyboardControl';
+import { useVoiceControl } from '../hooks/useVoiceControl';
 import JoystickControl from './JoystickControl';
 import PlaybackPanel from './PlaybackPanel';
+import VoiceControl from './VoiceControl';
 
 /** 6 key poses from key.config.json (base_link frame) */
 const KEY_CONFIG = {
@@ -46,6 +48,9 @@ export default function ControlDashboard({ sceneRef }: { sceneRef: React.RefObje
 
   // ── Keyboard control hook ─────────────────────────────
   useKeyboardControl({ pipeline: pipeline!, enabled: state.mode === 'manual' && !!pipeline });
+
+  // ── Voice control hook ────────────────────────────────
+  const voice = useVoiceControl(pipeline!);
 
   // IK target input fields
   const [ikTargetInput, setIkTargetInput] = useState({ x: 0.6, y: 0.3, z: 0.1 });
@@ -197,7 +202,7 @@ export default function ControlDashboard({ sceneRef }: { sceneRef: React.RefObje
       </div>
 
       {/* Mode switcher */}
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-4 gap-2">
         <button
           onClick={() => {
             setMode('manual');
@@ -237,6 +242,21 @@ export default function ControlDashboard({ sceneRef }: { sceneRef: React.RefObje
           }`}
         >
           Playback
+        </button>
+        <button
+          onClick={() => {
+            setMode('voice');
+            setIkSolverState({ running: false, message: '' });
+            sceneRef.current?.updateTargetMarker(null);
+            pipeline?.cancel();
+          }}
+          className={`px-3 py-2 rounded-lg text-xs font-medium transition-all duration-150 active:scale-[0.97] ${
+            state.mode === 'voice'
+              ? 'bg-primary text-primary-foreground shadow-md'
+              : 'bg-surface text-foreground/70 hover:text-foreground border border-border'
+          }`}
+        >
+          Voice
         </button>
       </div>
 
@@ -439,6 +459,11 @@ export default function ControlDashboard({ sceneRef }: { sceneRef: React.RefObje
             playbackStatus={playbackStatus}
           />
         </div>
+      )}
+
+      {/* Voice Mode — Speech-controlled arm */}
+      {state.mode === 'voice' && (
+        <VoiceControl voice={voice} />
       )}
 
       {/* End effector info */}

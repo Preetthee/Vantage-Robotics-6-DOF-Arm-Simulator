@@ -1,7 +1,8 @@
-import { Suspense, lazy, useRef, useState, useCallback } from "react";
+import { Suspense, lazy, useRef, useState, useCallback, useEffect } from "react";
 import ControlDashboard from "./components/ControlDashboard";
 import type { Scene3DHandle } from "./components/Scene3D";
 import { useArmState } from "./context/ArmStateContext";
+import { testFireworksKey } from "./testApiKey";
 
 const Scene3D = lazy(() => import("./components/Scene3D"));
 
@@ -13,6 +14,11 @@ function App() {
 
   const sceneRef = useRef<Scene3DHandle>(null);
   const { setIKTarget } = useArmState();
+
+  // Test Fireworks API key on mount
+  useEffect(() => {
+    testFireworksKey();
+  }, []);
 
   const handleGroundClick = useCallback((position: THREE.Vector3) => {
     setIKTarget({

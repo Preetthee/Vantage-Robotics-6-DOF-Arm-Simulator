@@ -18,6 +18,10 @@ export interface JointInfo {
   angle: number;
   /** Joint index in the state array */
   stateIndex: number;
+  /** Lower joint limit in radians (optional) */
+  lower?: number;
+  /** Upper joint limit in radians (optional) */
+  upper?: number;
 }
 
 export interface IKSolution {
@@ -405,6 +409,12 @@ export function solveIK(
     // Apply deltas
     for (let i = 0; i < angles.length; i++) {
       angles[i] += result.deltas[i];
+      // Clamp to joint limits from URDF limits
+      const lower = joints[i].lower;
+      const upper = joints[i].upper;
+      if (lower !== undefined && upper !== undefined) {
+        angles[i] = Math.max(lower, Math.min(upper, angles[i]));
+      }
     }
 
     iterations = iter + 1;
