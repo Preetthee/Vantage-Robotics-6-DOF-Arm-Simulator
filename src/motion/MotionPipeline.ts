@@ -157,13 +157,13 @@ export class MotionPipeline {
   }
 
   /** Smoothly return every controllable joint to its URDF zero position. */
-  reset(duration: number = 500): MoveResult {
+  reset(duration: number = 500, onComplete?: () => void): MoveResult {
     if (this._running) return { success: false, reason: 'Animation in progress' };
 
     const jointNames = this.getJointNames();
     if (jointNames.length === 0) return { success: false, reason: 'No joints loaded' };
 
-    this.animateAngles(this.readCurrentAngles(jointNames), new Array(jointNames.length).fill(0), duration);
+    this.animateAngles(this.readCurrentAngles(jointNames), new Array(jointNames.length).fill(0), duration, onComplete);
     return { success: true };
   }
 

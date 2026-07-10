@@ -275,8 +275,11 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ urdfPath, urdfContent
         keyEntries.forEach(([id, pos]) => {
           const keyNum = parseInt(id, 10);
           const { x, y, z } = pos;
-          const size = 0.03;
-          const geo = new THREE.BoxGeometry(size, size, size);
+          const size = 0.034;
+          // The panel is vertical after the URDF Z-up → Y-up conversion. A
+          // shallow source-Y depth becomes a front-facing world-Z button, so
+          // the pressable face is on the side/front rather than on top.
+          const geo = new THREE.BoxGeometry(size, 0.012, size);
           const mat = new THREE.MeshStandardMaterial({
             color: keyNum === 1 ? 0x4488ff : 0x3388cc,
             metalness: 0.2,
@@ -548,21 +551,6 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ urdfPath, urdfContent
     sphere.position.copy(position);
     scene.add(sphere);
     targetMarkerRef.current = sphere;
-
-    // Target ring (orbit-like ring for better visibility)
-    const ringGeo = new THREE.RingGeometry(0.04, 0.05, 32);
-    const ringMat = new THREE.MeshBasicMaterial({
-      color: 0xff4488,
-      side: THREE.DoubleSide,
-      transparent: true,
-      opacity: 0.5,
-    });
-    const ring = new THREE.Mesh(ringGeo, ringMat);
-    ring.position.copy(position);
-    ring.rotation.x = -Math.PI / 2;
-    scene.add(ring);
-    // Track ring as child of marker
-    sphere.userData.ring = ring;
 
     // Vertical dashed line from ground to target
     const linePoints = [

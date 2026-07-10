@@ -38,6 +38,7 @@ function stepLabel(keyIndex: number, phase: string): string {
 
 export default function PlaybackPanel({ sequencer, playbackStatus }: PlaybackPanelProps) {
   const [pin, setPin] = useState('');
+  const [pinAlert, setPinAlert] = useState<string | null>(null);
   const sequencerRef = useRef(sequencer);
   sequencerRef.current = sequencer;
 
@@ -53,6 +54,7 @@ export default function PlaybackPanel({ sequencer, playbackStatus }: PlaybackPan
   // ── Keypad handlers ───────────────────────────────────────────────
 
   const addDigit = useCallback((digit: string) => {
+    setPinAlert(null);
     setPin(prev => {
       if (prev.length >= MAX_PIN_LENGTH) return prev;
       return prev + digit;
@@ -60,11 +62,22 @@ export default function PlaybackPanel({ sequencer, playbackStatus }: PlaybackPan
   }, []);
 
   const backspace = useCallback(() => {
+    setPinAlert(null);
     setPin(prev => prev.slice(0, -1));
   }, []);
 
   const runSequence = useCallback(() => {
-    sequencerRef.current?.start(pin);
+    if (pin.length !== MAX_PIN_LENGTH) {
+      setPinAlert('Enter exactly 6 digits before running the sequence.');
+      return;
+    }
+    if (!/^[1-6]{6}$/.test(pin)) {
+      setPinAlert('Invalid PIN: this test panel accepts only digits 1 through 6.');
+      return;
+    }
+    if (!sequencerRef.current?.start(pin)) {
+      setPinAlert('Could not start the sequence. The arm may already be moving.');
+    }
   }, [pin]);
 
   const abortSequence = useCallback(() => {
@@ -73,6 +86,7 @@ export default function PlaybackPanel({ sequencer, playbackStatus }: PlaybackPan
 
   const resetAll = useCallback(() => {
     setPin('');
+    setPinAlert(null);
   }, []);
 
   const isRunning = status === 'running';
@@ -107,6 +121,32 @@ export default function PlaybackPanel({ sequencer, playbackStatus }: PlaybackPan
         </div>
 
         {/* Virtual keypad — digits 1-6 in a 3x2 grid */}
+        <label className="block mb-3">
+          <span className="mb-1.5 block text-[10px] font-medium uppercase tracking-wider text-foreground/60">Type 6-digit PIN</span>
+          <input
+            type="text"
+            inputMode="numeric"
+            pattern="[0-9]*"
+            maxLength={MAX_PIN_LENGTH}
+            value={pin}
+            disabled={isRunning}
+            onChange={(event) => {
+              const digits = event.target.value.replace(/\D/g, '').slice(0, MAX_PIN_LENGTH);
+              setPin(digits);
+              setPinAlert(null);
+            }}
+            placeholder="e.g. 123456"
+            className="w-full rounded-lg border border-border/60 bg-surface px-3 py-2 text-center text-sm font-mono font-semibold tracking-[0.3em] text-foreground placeholder:tracking-normal placeholder:text-foreground/35 focus:border-primary/60"
+            aria-describedby={pinAlert ? 'pin-alert' : undefined}
+          />
+        </label>
+
+        {pinAlert && (
+          <div id="pin-alert" role="alert" className="mb-3 rounded-lg border border-destructive/35 bg-destructive/10 px-3 py-2 text-[11px] font-medium text-destructive">
+            {pinAlert}
+          </div>
+        )}
+
         <div className="grid grid-cols-3 gap-2 mb-3">
           {['1', '2', '3', '4', '5', '6'].map(digit => (
             <button
