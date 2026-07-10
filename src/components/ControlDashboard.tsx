@@ -1,10 +1,20 @@
-import { useState, useMemo, useRef } from 'react';
+import { useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import { useArmState } from '../context/ArmStateContext';
 import * as THREE from 'three';
 import type { Scene3DHandle } from './Scene3D';
 import { MotionPipeline } from '../motion/MotionPipeline';
 import { useKeyboardControl } from '../hooks/useKeyboardControl';
 import JoystickControl from './JoystickControl';
+
+/** 6 key poses from key.config.json (base_link frame) */
+const KEY_CONFIG = {
+  "1": { x: 0.500, y: 0.050, z: 0.050 },
+  "2": { x: 0.550, y: 0.050, z: 0.050 },
+  "3": { x: 0.600, y: 0.050, z: 0.050 },
+  "4": { x: 0.500, y: -0.050, z: 0.050 },
+  "5": { x: 0.550, y: -0.050, z: 0.050 },
+  "6": { x: 0.600, y: -0.050, z: 0.050 },
+} as const;
 
 /** Format radians to degrees for display */
 function radToDeg(rad: number): string {
@@ -37,6 +47,7 @@ export default function ControlDashboard({ sceneRef }: { sceneRef: React.RefObje
   // IK target input fields
   const [ikTargetInput, setIkTargetInput] = useState({ x: 0.6, y: 0.3, z: 0.1 });
   const [ikSolverState, setIkSolverState] = useState<{ running: boolean; message: string }>({ running: false, message: '' });
+  const [activeKey, setActiveKey] = useState<number | null>(null);
 
   /** Solve IK through the motion pipeline */
   const handleSolveIK = () => {
@@ -76,6 +87,57 @@ export default function ControlDashboard({ sceneRef }: { sceneRef: React.RefObje
       setIkSolverState({ running: false, message: `${result.reason || 'IK failed'}` });
     }
   };
+
+  /** Move arm to a specific key position */
+  const goToKey = useCallback((keyId: number) => {
+    const scene = sceneRef.current;
+    if (!scene || !pipeline) return;
+
+    const pos = KEY_CONFIG[String(keyId) as keyof typeof KEY_CONFIG];
+    if (!pos) return;
+
+    const targetPos = new THREE.Vector3(pos.x, pos.z, -pos.y);
+    scene.updateTargetMarker(targetPos);
+    setIKTarget({ position: [targetPos.x, targetPos.y, targetPos.z] });
+    setActiveKey(keyId);
+    setStatus('running');
+
+    const result = pipeline.moveToTarget(targetPos, {
+      duration: 500,
+      onComplete: () => {
+        const finalPos = scene.getEEPosition();
+        const error = finalPos.distanceTo(targetPos);
+        setStatus(error < 0.01 ? 'reached' : 'idle');
+
+        // Clear marker after a moment
+        setTimeout(() => {
+          scene.updateTargetMarker(null);
+          setActiveKey(null);
+        }, 2000);
+      },
+    });
+
+    if (!result.success) {
+      setStatus('error');
+      setActiveKey(null);
+    }
+  }, [pipeline, setIKTarget, setStatus]);
+
+  // ── Keyboard shortcut for keys 1-6 ─────────────────────
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Only when not in an input/textarea
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+      const keyId = parseInt(e.key, 10);
+      if (keyId >= 1 && keyId <= 6 && !pipeline?.isRunning) {
+        goToKey(keyId);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [goToKey, pipeline]);
 
   return (
     <div className="flex flex-col h-full overflow-y-auto scrollbar-thin p-5 gap-5">
@@ -201,6 +263,46 @@ export default function ControlDashboard({ sceneRef }: { sceneRef: React.RefObje
         >
           Reset Pose
         </button>
+      </div>
+
+      {/* 6-Key Test Panel */}
+      <div className="p-3 rounded-xl bg-surface/50 border border-border/50">
+        <h3 className="text-[11px] font-heading font-medium text-foreground/60 uppercase tracking-wider mb-3 flex items-center justify-between">
+          <span>Test Panel</span>
+          <span className="text-[9px] text-foreground/30 font-normal">Keys 1–6</span>
+        </h3>
+        <div className="grid grid-cols-3 gap-2">
+          {([1, 2, 3, 4, 5, 6] as const).map(id => {
+            const pos = KEY_CONFIG[String(id) as keyof typeof KEY_CONFIG];
+            const isActive = activeKey === id;
+            const isReached = activeKey === id && state.status === 'reached';
+            return (
+              <button
+                key={id}
+                onClick={() => goToKey(id)}
+                disabled={pipeline?.isRunning}
+                className={`relative flex flex-col items-center justify-center gap-0.5 px-2 py-2.5 rounded-lg text-xs font-heading font-bold transition-all duration-150 active:scale-[0.95] ${
+                  isReached
+                    ? 'bg-success/20 text-success border border-success/40 shadow-sm shadow-success/10'
+                    : isActive
+                    ? 'bg-primary/20 text-primary border border-primary/40 shadow-sm shadow-primary/10'
+                    : 'bg-surface text-foreground/60 border border-border/50 hover:border-primary/30 hover:text-foreground/80'
+                } ${pipeline?.isRunning ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+              >
+                <span className="text-base leading-none">{id}</span>
+                <span className="text-[8px] font-mono font-normal text-foreground/40">
+                  {pos.x.toFixed(3)},{pos.y.toFixed(3)}
+                </span>
+                {isReached && (
+                  <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-success rounded-full shadow-sm shadow-success/50" />
+                )}
+              </button>
+            );
+          })}
+        </div>
+        <p className="text-[10px] text-foreground/40 mt-2 text-center">
+          Press <kbd className="px-1.5 py-0.5 rounded bg-muted text-foreground/60 text-[9px] font-mono">1</kbd>–<kbd className="px-1.5 py-0.5 rounded bg-muted text-foreground/60 text-[9px] font-mono">6</kbd> to jump to a key
+        </p>
       </div>
 
       {/* IK Mode Controls */}

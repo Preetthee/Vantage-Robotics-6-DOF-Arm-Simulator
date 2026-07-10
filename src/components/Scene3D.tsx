@@ -235,14 +235,16 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ urdfPath, urdfContent
         keyEntries.forEach(([id, pos]) => {
           const keyNum = parseInt(id, 10);
           const { x, y, z } = pos;
-          const size = 0.008;
+          const size = 0.02;
           const geo = new THREE.BoxGeometry(size, size, size);
           const mat = new THREE.MeshStandardMaterial({
-            color: keyNum === 1 ? 0xffffff : 0x222222,
-            metalness: keyNum === 1 ? 0.1 : 0.8,
-            roughness: keyNum === 1 ? 0.5 : 0.3,
-            emissive: keyNum === 1 ? 0x4488ff : 0x000000,
-            emissiveIntensity: keyNum === 1 ? 0.3 : 0,
+            color: keyNum === 1 ? 0x4488ff : 0x3388cc,
+            metalness: 0.2,
+            roughness: 0.3,
+            transparent: true,
+            opacity: 0.55,
+            emissive: keyNum === 1 ? 0x4488ff : 0x2266aa,
+            emissiveIntensity: keyNum === 1 ? 0.5 : 0.15,
           });
           const mesh = new THREE.Mesh(geo, mat);
           mesh.position.set(x, y, z);
