@@ -279,7 +279,9 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ urdfPath, urdfContent
           // The panel is vertical after the URDF Z-up → Y-up conversion. A
           // shallow source-Y depth becomes a front-facing world-Z button, so
           // the pressable face is on the side/front rather than on top.
-          const geo = new THREE.BoxGeometry(size, 0.012, size);
+          // A taller local-Z dimension becomes world-Y after the frame
+          // conversion, making each key visibly stand upright.
+          const geo = new THREE.BoxGeometry(size, 0.012, 0.065);
           const mat = new THREE.MeshStandardMaterial({
             color: keyNum === 1 ? 0x4488ff : 0x3388cc,
             metalness: 0.2,

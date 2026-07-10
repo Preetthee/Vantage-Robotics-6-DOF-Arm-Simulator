@@ -33,6 +33,7 @@ export default function JoystickControl({ pipeline, maxSpeed = 0.02 }: JoystickC
   const isDraggingRef = useRef(false);
   const [isDragging, setIsDragging] = useState(false);
   const [knobPos, setKnobPos] = useState({ x: 0, y: 0 });
+  const [speedScale, setSpeedScale] = useState(0.65);
 
   const [, forceRender] = useReducer(x => x + 1, 0);
 
@@ -54,12 +55,12 @@ export default function JoystickControl({ pipeline, maxSpeed = 0.02 }: JoystickC
       const dy = displacement.current.y;
       if (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01) {
         // Up/down → Z axis (body-frame forward/back)
-        pipeline.jog(new THREE.Vector3(dx * maxSpeed, 0, dy * maxSpeed));
+        pipeline.jog(new THREE.Vector3(dx * maxSpeed * speedScale, 0, dy * maxSpeed * speedScale));
       }
       rafId.current = requestAnimationFrame(tick);
     };
     rafId.current = requestAnimationFrame(tick);
-  }, [pipeline, maxSpeed]);
+  }, [pipeline, maxSpeed, speedScale]);
 
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
     if (!isDraggingRef.current) return;
@@ -202,7 +203,26 @@ export default function JoystickControl({ pipeline, maxSpeed = 0.02 }: JoystickC
         </div>
 
         {/* Y (vertical) jog slider — auto-returns to center on release */}
-        <div className="flex flex-col items-center gap-1.5">
+        <div className="flex h-24 w-20 flex-col justify-center gap-2 rounded-xl border border-border/60 bg-surface/70 px-2">
+          <div className="flex items-center justify-between">
+            <label htmlFor="joystick-speed" className="text-[9px] font-mono font-semibold uppercase tracking-wider text-foreground/60">Speed</label>
+            <span className="text-[9px] font-mono text-primary">{Math.round(speedScale * 100)}%</span>
+          </div>
+          <input
+            id="joystick-speed"
+            type="range"
+            min="0.2"
+            max="1"
+            step="0.05"
+            value={speedScale}
+            onChange={(event) => setSpeedScale(parseFloat(event.target.value))}
+            className="joint-slider w-full"
+            aria-label="Joystick speed"
+          />
+          <span className="text-[8px] leading-tight text-foreground/45">Controls drag speed</span>
+        </div>
+
+        <div className="hidden">
           <label className="text-[9px] font-mono text-foreground/40 uppercase tracking-wider">Y</label>
           <div className="relative h-24 w-7 flex items-center">
             {/* Slider track background */}
