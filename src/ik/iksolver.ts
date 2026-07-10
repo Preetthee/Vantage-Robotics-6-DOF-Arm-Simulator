@@ -296,6 +296,7 @@ function ikStep(
   useOrientation: boolean,
   targetOrientation?: THREE.Quaternion,
   currentEEOrientation?: THREE.Quaternion,
+  orientationWeight: number = 0.05,
 ): { deltas: number[]; error: number } | null {
   const n = joints.length;
   const J = computeJacobian(joints, currentEEPosition);
@@ -315,7 +316,9 @@ function ikStep(
     if (axis.lengthSq() > 0) axis.normalize();
     error6 = [
       posError.x, posError.y, posError.z,
-      axis.x * angle, axis.y * angle, axis.z * angle,
+      axis.x * angle * orientationWeight,
+      axis.y * angle * orientationWeight,
+      axis.z * angle * orientationWeight,
     ];
   } else {
     error6 = [posError.x, posError.y, posError.z, 0, 0, 0];
@@ -363,6 +366,8 @@ export function solveIK(
     positionTolerance?: number;
     stepSize?: number;
     useOrientation?: boolean;
+    /** Relative importance of tool orientation versus position (default 0.05). */
+    orientationWeight?: number;
     targetOrientation?: THREE.Quaternion;
     getEEPosition: () => THREE.Vector3;
     getEEOrientation?: () => THREE.Quaternion;
@@ -374,6 +379,7 @@ export function solveIK(
   const posTol = options.positionTolerance ?? 0.005; // 5mm
   const stepSize = options.stepSize ?? 0.3;
   const useOri = options.useOrientation ?? false;
+  const orientationWeight = options.orientationWeight ?? 0.05;
 
   const angles = options.readAngles();
   let iterations = 0;
@@ -402,6 +408,7 @@ export function solveIK(
     const result = ikStep(
       jointInfo, target, eePos, stepSize,
       useOri, targetOri, currentOri,
+      orientationWeight,
     );
 
     if (!result) break;

@@ -56,10 +56,10 @@ function App() {
   const handleDragLeave = () => setDragOver(false);
 
   return (
-    <div className="flex h-full w-full">
+    <div className="app-shell flex h-full w-full">
       {/* 3D viewport — fills available space */}
       <main
-        className="relative flex-1 min-w-0"
+        className="viewport-shell relative flex-1 min-w-0"
         onDrop={urdfContent ? undefined : handleDrop}
         onDragOver={urdfContent ? undefined : handleDragOver}
         onDragLeave={urdfContent ? undefined : handleDragLeave}
@@ -83,24 +83,32 @@ function App() {
           )}
         </Suspense>
 
+        <div className="scene-hud pointer-events-none absolute left-5 top-5 flex items-center gap-3 select-none">
+          <div className="scene-hud-mark"><span className="live-dot" /></div>
+          <div>
+            <p className="font-heading text-xs font-semibold tracking-[0.16em] text-foreground/90">VANTAGE / SIMULATION</p>
+            <p className="mt-0.5 text-[10px] uppercase tracking-[0.14em] text-foreground/40">6-axis digital twin · safe workspace</p>
+          </div>
+        </div>
+
         {/* Upload overlay — shown when no URDF is loaded */}
         {!urdfContent && (
           <div
-            className={`absolute inset-0 z-20 flex flex-col items-center justify-center gap-5 transition-all duration-200 ${
+            className={`upload-overlay absolute inset-0 z-20 flex flex-col items-center justify-center gap-5 transition-all duration-300 ${
               dragOver
                 ? 'bg-primary/10 backdrop-blur-sm'
                 : 'bg-background/60 backdrop-blur-[2px]'
             }`}
           >
-            <div className="flex flex-col items-center gap-2">
-              <div className="w-16 h-16 rounded-2xl border-2 border-dashed border-border flex items-center justify-center text-muted">
+            <div className="upload-card flex flex-col items-center gap-4">
+              <div className="flex h-16 w-16 items-center justify-center rounded-2xl border-2 border-dashed border-primary/50 bg-primary/10 text-primary shadow-lg shadow-primary/10">
                 <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                   <polyline points="17 8 12 3 7 8" />
                   <line x1="12" y1="3" x2="12" y2="15" />
                 </svg>
               </div>
-              <p className="text-sm font-heading font-medium text-foreground/80">
+              <p className="text-sm font-heading font-medium text-foreground/90">
                 Load a URDF robot model
               </p>
               <p className="text-xs text-foreground/50 text-center max-w-[260px] leading-relaxed">
@@ -109,7 +117,7 @@ function App() {
             </div>
             <button
               onClick={() => fileInputRef.current?.click()}
-              className="px-5 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-medium shadow-lg shadow-primary/20 hover:brightness-110 active:scale-[0.97] transition-all duration-150"
+              className="primary-action px-5 py-2.5 rounded-xl bg-primary text-primary-foreground text-sm font-medium shadow-lg shadow-primary/30 hover:brightness-110 active:scale-[0.97] transition-all duration-150"
             >
               Select URDF File
             </button>
@@ -143,7 +151,7 @@ function App() {
       </main>
 
       {/* Sidebar dashboard */}
-      <aside className="w-[420px] min-w-[380px] max-w-[480px] border-l border-border bg-surface overflow-y-auto">
+      <aside className="control-rail w-[420px] min-w-[380px] max-w-[480px] overflow-y-auto border-l border-border/70">
         <ControlDashboard sceneRef={sceneRef} />
       </aside>
     </div>

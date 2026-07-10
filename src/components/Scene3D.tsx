@@ -622,10 +622,13 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ urdfPath, urdfContent
 
     const useOri = !!targetOrientation;
     return ikSolve(jointInfo, targetPos, {
-      maxIterations: 100,
-      positionTolerance: 0.001,
-      stepSize: 0.2,
+      // Key presses require millimetre accuracy. Give the positional target
+      // enough iterations and keep orientation as a secondary preference.
+      maxIterations: 250,
+      positionTolerance: 0.0005,
+      stepSize: 0.3,
       useOrientation: useOri,
+      orientationWeight: 0.05,
       targetOrientation: targetOrientation,
       getEEPosition,
       getEEOrientation,

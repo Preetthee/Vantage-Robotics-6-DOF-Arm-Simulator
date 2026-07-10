@@ -1,276 +1,129 @@
-/**
- * parseCommand — Send transcribed voice text to a Fireworks AI LLM and
- * interpret it as a structured motion command for the robot arm.
- *
- * The LLM is prompted to output JSON in one of a few recognised command
- * formats, which is then parsed and returned as a `VoiceCommand`.
- */
-
 import { FIREWORKS_API_KEY, FIREWORKS_MODEL, FIREWORKS_BASE_URL } from '../constants/config';
 
-// ─── Command types ───────────────────────────────────────────────────
+export type Vector3 = { x: number; y: number; z: number };
 
-export interface MoveRelative {
-  type: 'move_relative';
-  /** Axis in world space: 'x', 'y', or 'z' */
-  axis: 'x' | 'y' | 'z';
-  /** Signed delta in metres (e.g. 0.02 = 2cm) */
-  value: number;
+/** Small, deterministic action vocabulary used after free-speech planning. */
+export type VoiceAction =
+  | { kind: 'move_to'; target: Vector3 }
+  | { kind: 'move_by'; delta: Vector3 }
+  | { kind: 'rotate_joint'; joint: number; degrees: number }
+  | { kind: 'joint_pose'; angles: number[] }
+  | { kind: 'home' };
+
+export interface VoicePlan {
+  summary: string;
+  actions: VoiceAction[];
 }
-
-export interface GotoAbsolute {
-  type: 'goto';
-  /** Target position in metres (Three.js world coordinates, Y-up) */
-  x: number;
-  y: number;
-  z: number;
-}
-
-export interface GotoKey {
-  type: 'goto_key';
-  /** Key number 1–6 */
-  key: number;
-}
-
-export interface RotateJoint {
-  type: 'rotate_joint';
-  /** Joint index 1–6 (J1 = base, J6 = wrist) */
-  joint: number;
-  /** Signed degrees to rotate */
-  degrees: number;
-}
-
-/** Explicit 6-joint target pose. Angles are supplied in degrees. */
-export interface JointPose {
-  type: 'joint_pose';
-  angles: number[];
-}
-
-export interface ResetArm {
-  type: 'reset';
-}
-
-/** An ordered plan produced by the optional agentic voice layer. */
-export interface CommandSequence {
-  type: 'sequence';
-  commands: Array<MoveRelative | GotoAbsolute | GotoKey | RotateJoint | JointPose | ResetArm>;
-}
-
-export interface UnknownCommand {
-  type: 'unknown';
-  /** Human-readable explanation of why the command wasn't understood */
-  explanation: string;
-}
-
-export type VoiceCommand =
-  | MoveRelative
-  | GotoAbsolute
-  | GotoKey
-  | RotateJoint
-  | JointPose
-  | ResetArm
-  | CommandSequence
-  | UnknownCommand;
-
-// ─── System prompt ──────────────────────────────────────────────────
-
-const SYSTEM_PROMPT = `You control a 6-DOF robotic arm (Vantage Robotics). The user gives you a natural-language instruction, and you must output a JSON command to move the arm.
-
-Available commands (output ONLY valid JSON — no markdown, no code fences):
-
-1. Move relative (jog):
-   {"type":"move_relative","axis":"x"|"y"|"z","value":<signed metres>}
-   Examples: "move up 2cm" → {"type":"move_relative","axis":"y","value":0.02}
-             "go left 5cm" → {"type":"move_relative","axis":"x","value":-0.05}
-             "move forward" → {"type":"move_relative","axis":"z","value":-0.03}
-
-2. Go to absolute position:
-   {"type":"goto","x":<metres>,"y":<metres>,"z":<metres>}
-   The key panel is at x=0.5-0.6, y=0.04-0.06, z=0.05.
-
-3. Go to a test-panel position:
-   Use the supplied panel coordinates and output a direct goto object.
-   Example: "go to position 3" -> {"type":"goto","x":0.600,"y":0.050,"z":-0.050}
-
-4. Rotate a specific joint:
-   {"type":"rotate_joint","joint":<1-6>,"degrees":<signed degrees>}
-   Example: "rotate the base 30 degrees" → {"type":"rotate_joint","joint":1,"degrees":30}
-
-5. Reset:
-   {"type":"reset"}
-   "reset the arm", "go home"
-
-6. Multi-step instruction (only when multiple actions are explicit):
-   {"type":"sequence","commands":[<commands from 1-5>]}
-   Example: "move up 2cm, then rotate base 15 degrees" ->
-   {"type":"sequence","commands":[{"type":"move_relative","axis":"y","value":0.02},{"type":"rotate_joint","joint":1,"degrees":15}]}
-
-7. Explicit joint pose (only when all six joint angles are explicitly requested):
-   {"type":"joint_pose","angles":[J1,J2,J3,J4,J5,J6]}
-   Angles are degrees and must be six finite numbers.
-
-IMPORTANT RULES:
-- Do not output goto_key. Convert references to a panel position/key directly into a goto with its listed world coordinates.
-- For relative requests, use the current end-effector position supplied in the context to calculate an absolute goto target whenever possible.
-- If the target is ambiguous and no safe coordinate can be inferred, return unknown and ask for the missing coordinate; do not write an explanation before the JSON.
-- Value for move_relative is in METRES (not cm). Convert cm to metres by dividing by 100.
-- If the user says "forward" it means negative Z (into the scene), "back" means positive Z.
-- If the user says something unclear, output: {"type":"unknown","explanation":"<why you couldn't understand>"}
-- Output ONLY valid JSON — no other text.`;
-
-// ─── Parser ──────────────────────────────────────────────────────────
 
 export interface ParseResult {
-  command: VoiceCommand;
+  plan: VoicePlan;
   raw: string;
 }
 
-/**
- * Send the transcribed speech to Fireworks AI and return a parsed command.
- * Throws on network errors or invalid responses.
- */
-export async function parseWithLLM(
+const MAX_ACTIONS = 6;
+const MAX_RELATIVE_DISTANCE = 0.25; // metres per requested step
+
+const SYSTEM_PROMPT = `You are a motion planner for a browser-based 6-axis robot arm. Convert free-form operator speech into a safe JSON plan.
+
+Return ONLY one JSON object with this exact shape:
+{"summary":"short plain-English summary","actions":[...]}
+
+Allowed action objects:
+- {"kind":"move_to","target":{"x":number,"y":number,"z":number}} for an absolute world target in metres.
+- {"kind":"move_by","delta":{"x":number,"y":number,"z":number}} for a relative move in metres.
+- {"kind":"rotate_joint","joint":1..6,"degrees":number}.
+- {"kind":"joint_pose","angles":[six angles in degrees]}.
+- {"kind":"home"}.
+
+Rules:
+- Interpret natural language freely, including multiple ordered requests. Produce at most 6 actions.
+- Never invent missing coordinates. If a request is ambiguous, oversized, unsafe, or cannot be expressed safely, return {"summary":"reason and requested clarification","actions":[]}.
+- A single relative move must not exceed 0.25 metres. Reject requests such as 2 km, 10 m, or 1 m instead of scaling them down.
+- Use the provided live pose and panel coordinates when they make a request unambiguous.
+- "up/down" change Y, "left/right" change X, and "forward/back" change Z.
+- Do not include explanations, markdown, or any text outside JSON.`;
+
+function isVector(value: unknown): value is Vector3 {
+  if (!value || typeof value !== 'object') return false;
+  const vector = value as Vector3;
+  return Number.isFinite(vector.x) && Number.isFinite(vector.y) && Number.isFinite(vector.z);
+}
+
+function validatePlan(value: unknown): VoicePlan {
+  if (!value || typeof value !== 'object') throw new Error('The language model did not return a plan.');
+  const plan = value as Partial<VoicePlan>;
+  if (typeof plan.summary !== 'string' || !Array.isArray(plan.actions) || plan.actions.length > MAX_ACTIONS) {
+    throw new Error('The language model returned an invalid motion plan.');
+  }
+
+  for (const action of plan.actions) {
+    if (!action || typeof action !== 'object' || !('kind' in action)) throw new Error('The plan contains an invalid action.');
+    const item = action as VoiceAction;
+    if (item.kind === 'move_to' && !isVector(item.target)) throw new Error('A target position must contain finite x, y, and z values.');
+    if (item.kind === 'move_by') {
+      if (!isVector(item.delta)) throw new Error('A relative movement must contain finite x, y, and z values.');
+      if (Math.hypot(item.delta.x, item.delta.y, item.delta.z) > MAX_RELATIVE_DISTANCE) {
+        throw new Error('Requested relative movement exceeds the 250 mm safety limit.');
+      }
+    }
+    if (item.kind === 'rotate_joint' && (!Number.isInteger(item.joint) || item.joint < 1 || item.joint > 6 || !Number.isFinite(item.degrees) || Math.abs(item.degrees) > 180)) {
+      throw new Error('Joint rotation is outside the allowed range.');
+    }
+    if (item.kind === 'joint_pose' && (!Array.isArray(item.angles) || item.angles.length !== 6 || item.angles.some(angle => !Number.isFinite(angle)))) {
+      throw new Error('A joint pose must contain exactly six finite angles.');
+    }
+    if (!['move_to', 'move_by', 'rotate_joint', 'joint_pose', 'home'].includes(item.kind)) {
+      throw new Error('The plan contains an unsupported action.');
+    }
+  }
+  return plan as VoicePlan;
+}
+
+/** Parse a JSON object even if a non-compliant model wraps it in prose. */
+function extractJson(text: string): unknown {
+  try { return JSON.parse(text.trim()); } catch { /* scan below */ }
+  for (let start = text.indexOf('{'); start >= 0; start = text.indexOf('{', start + 1)) {
+    let depth = 0;
+    let quoted = false;
+    let escaped = false;
+    for (let end = start; end < text.length; end++) {
+      const char = text[end];
+      if (quoted) {
+        if (escaped) escaped = false;
+        else if (char === '\\') escaped = true;
+        else if (char === '"') quoted = false;
+      } else if (char === '"') quoted = true;
+      else if (char === '{') depth++;
+      else if (char === '}' && --depth === 0) {
+        try { return JSON.parse(text.slice(start, end + 1)); } catch { break; }
+      }
+    }
+  }
+  throw new Error('The language model did not return valid JSON. Please repeat the instruction.');
+}
+
+export async function parseFreeSpeech(
   transcript: string,
+  context: { currentPosition: Vector3; panelPositions: Vector3[] },
   signal?: AbortSignal,
-  context?: { currentPosition: { x: number; y: number; z: number } },
 ): Promise<ParseResult> {
-  const position = context?.currentPosition;
-  const runtimeContext = position
-    ? `Live scene context (Three.js world coordinates, Y-up): end effector is at (${position.x.toFixed(3)}, ${position.y.toFixed(3)}, ${position.z.toFixed(3)}). Test panel positions: key/position 1=(0.500,0.050,-0.050), 2=(0.550,0.050,-0.050), 3=(0.600,0.050,-0.050), 4=(0.500,0.050,0.050), 5=(0.550,0.050,0.050), 6=(0.600,0.050,0.050).`
-    : 'No live pose is available. Do not infer a relative target.';
+  const { currentPosition, panelPositions } = context;
+  const runtimeContext = `Current stylus position: (${currentPosition.x.toFixed(3)}, ${currentPosition.y.toFixed(3)}, ${currentPosition.z.toFixed(3)}). Panel positions 1-6: ${panelPositions.map((p, i) => `${i + 1}=(${p.x.toFixed(3)},${p.y.toFixed(3)},${p.z.toFixed(3)})`).join('; ')}.`;
   const response = await fetch(`${FIREWORKS_BASE_URL}/chat/completions`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${FIREWORKS_API_KEY}`,
-    },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${FIREWORKS_API_KEY}` },
     body: JSON.stringify({
       model: FIREWORKS_MODEL,
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        {
-          role: 'user',
-          content: `${runtimeContext}\n\nOperator instruction: ${transcript}`,
-        },
-      ],
-      temperature: 0.1,
-      max_tokens: 300,
+      messages: [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content: `${runtimeContext}\nOperator: ${transcript}` }],
+      temperature: 0,
+      max_tokens: 500,
       response_format: { type: 'json_object' },
     }),
     signal,
   });
-
-  if (!response.ok) {
-    const body = await response.text().catch(() => '');
-    throw new Error(`Fireworks API error ${response.status}: ${body}`);
-  }
-
+  if (!response.ok) throw new Error(`Voice planner error ${response.status}.`);
   const data = await response.json();
-  const content: string = data?.choices?.[0]?.message?.content ?? '';
-
-  if (!content) {
-    throw new Error('Empty response from Fireworks API');
-  }
-
-  // Parse the response — it should be pure JSON
-  let parsed: any;
-  try {
-    parsed = JSON.parse(content.trim());
-  } catch {
-    // Try to extract JSON from markdown code blocks
-    const match = content.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (match) {
-      try {
-        parsed = JSON.parse(match[1].trim());
-      } catch {
-        throw new Error(`Could not parse LLM response as JSON:\n${content}`);
-      }
-    } else {
-      const objectMatch = content.match(/\{[\s\S]*\}/);
-      if (!objectMatch) {
-        throw new Error('The language model did not return a JSON command. Please repeat the command with a target or coordinate.');
-      }
-      try {
-        parsed = JSON.parse(objectMatch[0]);
-      } catch {
-        throw new Error('The language model returned invalid JSON. Please repeat the command.');
-      }
-    }
-  }
-
-  // Validate the response shape
-  if (!parsed || typeof parsed !== 'object' || !parsed.type) {
-    return {
-      command: { type: 'unknown', explanation: 'LLM returned an unexpected format' },
-      raw: content,
-    };
-  }
-
-  // Type-narrow based on the command
-  const command = parsed as VoiceCommand;
-
-  // Validate required fields per type
-  switch (command.type) {
-    case 'move_relative': {
-      if (!['x', 'y', 'z'].includes(command.axis)) {
-        return { command: { type: 'unknown', explanation: `Invalid axis: ${command.axis}` }, raw: content };
-      }
-      if (typeof command.value !== 'number' || isNaN(command.value)) {
-        return { command: { type: 'unknown', explanation: 'Missing or invalid value for move_relative' }, raw: content };
-      }
-      break;
-    }
-    case 'goto': {
-      if (typeof command.x !== 'number' || typeof command.y !== 'number' || typeof command.z !== 'number') {
-        return { command: { type: 'unknown', explanation: 'Missing or invalid coordinates for goto' }, raw: content };
-      }
-      break;
-    }
-    case 'goto_key': {
-      if (![1, 2, 3, 4, 5, 6].includes(command.key)) {
-        return { command: { type: 'unknown', explanation: `Invalid key number: ${command.key}. Use 1–6.` }, raw: content };
-      }
-      break;
-    }
-    case 'rotate_joint': {
-      if (command.joint < 1 || command.joint > 6) {
-        return { command: { type: 'unknown', explanation: `Invalid joint: ${command.joint}. Use 1–6.` }, raw: content };
-      }
-      if (typeof command.degrees !== 'number' || isNaN(command.degrees)) {
-        return { command: { type: 'unknown', explanation: 'Missing or invalid degrees for rotate_joint' }, raw: content };
-      }
-      break;
-    }
-    case 'joint_pose': {
-      if (!Array.isArray(command.angles) || command.angles.length !== 6 || command.angles.some(angle => !Number.isFinite(angle))) {
-        return { command: { type: 'unknown', explanation: 'A joint pose must contain exactly six finite angles in degrees' }, raw: content };
-      }
-      break;
-    }
-    case 'reset':
-    case 'unknown':
-      break;
-    case 'sequence': {
-      if (!Array.isArray(command.commands) || command.commands.length === 0 || command.commands.length > 8) {
-        return { command: { type: 'unknown', explanation: 'A sequence must contain 1 to 8 commands' }, raw: content };
-      }
-      const invalidStep = command.commands.some(step => {
-        if (!step || !step.type) return true;
-        if (step.type === 'move_relative') return !['x', 'y', 'z'].includes(step.axis) || !Number.isFinite(step.value);
-        if (step.type === 'goto') return !Number.isFinite(step.x) || !Number.isFinite(step.y) || !Number.isFinite(step.z);
-        if (step.type === 'goto_key') return ![1, 2, 3, 4, 5, 6].includes(step.key);
-        if (step.type === 'rotate_joint') return step.joint < 1 || step.joint > 6 || !Number.isFinite(step.degrees);
-        if (step.type === 'joint_pose') return !Array.isArray(step.angles) || step.angles.length !== 6 || step.angles.some(angle => !Number.isFinite(angle));
-        return step.type !== 'reset';
-      });
-      if (invalidStep) {
-        return { command: { type: 'unknown', explanation: 'Sequence contains an invalid or unsupported step' }, raw: content };
-      }
-      break;
-    }
-    default:
-      return { command: { type: 'unknown', explanation: `Unrecognised command type: ${(command as any).type}` }, raw: content };
-  }
-
-  return { command, raw: content };
+  const raw = data?.choices?.[0]?.message?.content;
+  if (typeof raw !== 'string' || !raw.trim()) throw new Error('Voice planner returned an empty response.');
+  return { plan: validatePlan(extractJson(raw)), raw };
 }

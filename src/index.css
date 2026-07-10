@@ -119,3 +119,135 @@ html, body, #root {
   box-shadow: 0 0 0 1px var(--color-border), 0 2px 4px rgba(0,0,0,0.3);
   cursor: pointer;
 }
+
+/* Light, calm visual layer for the simulation console. */
+:root {
+  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-heading: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --color-primary: oklch(0.52 0.11 250);
+  --color-secondary: oklch(0.60 0.08 238);
+  --color-accent: oklch(0.69 0.10 80);
+  --color-background: oklch(0.90 0.018 250);
+  --color-foreground: oklch(0.25 0.025 250);
+  --color-muted: oklch(0.83 0.020 250);
+  --color-border: oklch(0.73 0.025 250);
+  --color-destructive: oklch(0.55 0.17 28);
+  --color-ring: oklch(0.52 0.11 250);
+  --color-surface: oklch(0.94 0.012 250);
+  --color-success: oklch(0.53 0.11 155);
+  --color-warning: oklch(0.62 0.11 75);
+}
+
+html, body, #root {
+  background: linear-gradient(135deg, #d7e0ee 0%, #c9d5e6 48%, #dce5ef 100%);
+}
+
+/* Typography and accessibility pass. Tailwind utilities continue to provide
+   layout; these base rules make every control easier to scan and operate. */
+body {
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 14px;
+  line-height: 1.45;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  color: var(--color-foreground);
+  letter-spacing: -0.015em;
+}
+
+button {
+  font-family: inherit;
+  font-weight: 600;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--color-primary) 34%, transparent);
+  outline-offset: 2px;
+}
+
+input, select, textarea {
+  color: var(--color-foreground);
+  font-family: var(--font-mono);
+  font-weight: 500;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: color-mix(in srgb, var(--color-foreground) 48%, transparent);
+}
+
+/* Improve low-emphasis Tailwind text colours on the muted light surface. */
+.control-rail .text-foreground\/50 { color: color-mix(in srgb, var(--color-foreground) 70%, transparent) !important; }
+.control-rail .text-foreground\/40 { color: color-mix(in srgb, var(--color-foreground) 60%, transparent) !important; }
+.control-rail .text-foreground\/30 { color: color-mix(in srgb, var(--color-foreground) 52%, transparent) !important; }
+.control-rail .text-foreground\/60 { color: color-mix(in srgb, var(--color-foreground) 78%, transparent) !important; }
+
+.control-rail button:not(:disabled):hover {
+  transform: translateY(-1px);
+}
+
+.control-rail button:disabled {
+  opacity: 0.55;
+}
+
+.app-shell {
+  gap: 14px;
+  padding: 14px;
+  box-sizing: border-box;
+}
+
+.viewport-shell {
+  overflow: hidden;
+  border: 1px solid color-mix(in oklab, var(--color-border) 82%, white);
+  border-radius: 22px;
+  background: #15233a;
+  box-shadow: 0 20px 48px rgba(62, 83, 122, 0.14), 0 2px 6px rgba(62, 83, 122, 0.08);
+}
+
+.control-rail {
+  border: 1px solid color-mix(in oklab, var(--color-border) 85%, white);
+  border-radius: 22px;
+  background: color-mix(in srgb, #e6edf6 88%, #c8d7ea 12%);
+  box-shadow: 0 16px 38px rgba(55, 73, 105, 0.13), 0 2px 6px rgba(55, 73, 105, 0.07);
+}
+
+.scene-hud {
+  border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 14px;
+  padding: 10px 12px;
+  background: rgba(14, 28, 50, 0.54);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.16);
+}
+
+.scene-hud-mark {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 9px;
+  background: rgba(104, 178, 255, 0.16);
+}
+
+.upload-card {
+  min-width: 330px;
+  padding: 28px;
+  border: 1px solid rgba(255,255,255,0.16);
+  border-radius: 22px;
+  background: rgba(17, 31, 53, 0.58);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 20px 48px rgba(0,0,0,0.2);
+}
+
+.primary-action {
+  box-shadow: 0 10px 22px color-mix(in srgb, var(--color-primary) 25%, transparent);
+}
+
+button, input, select, textarea {
+  transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}

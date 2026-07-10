@@ -124,6 +124,10 @@ export class MotionPipeline {
     const currentPos = this.scene.getEEPosition();
     const targetPos = currentPos.clone().add(delta);
 
+    if (!this.isSafeTarget(targetPos)) {
+      return { success: false, reason: 'Requested movement leaves the safe workspace' };
+    }
+
     console.log('[JOG] delta:', delta.toArray().map(v => v.toFixed(4)), 'currentEE:', currentPos.toArray().map(v => v.toFixed(4)), 'target:', targetPos.toArray().map(v => v.toFixed(4)));
 
     const result = this.scene.solveIK(targetPos);
