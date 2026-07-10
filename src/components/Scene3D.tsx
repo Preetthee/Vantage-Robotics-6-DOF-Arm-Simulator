@@ -19,6 +19,12 @@ export interface Scene3DHandle {
   solveIK: (targetPos: THREE.Vector3) => import('../ik/iksolver').IKSolution;
   /** Show/hide the target position marker in the scene */
   updateTargetMarker: (position: THREE.Vector3 | null) => void;
+  /** Highlight a test-panel key by ID (0 = none/clear). The key will glow with a pulsing emissive. */
+  highlightKey: (keyId: number | null) => void;
+  /** Flash a test-panel key green (success) or red (failure) for brief visual confirmation. */
+  flashKey: (keyId: number, success: boolean) => void;
+  /** Clear all key highlights and reset emissive intensities to their original values. */
+  clearHighlights: () => void;
 }
 
 interface Scene3DProps {
@@ -46,6 +52,16 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ urdfPath, urdfContent
   const raycasterRef = useRef(new THREE.Raycaster());
   const onGroundClickRef = useRef<((pos: THREE.Vector3) => void) | undefined>(undefined);
   onGroundClickRef.current = onGroundClick;
+
+  /** Map of keyId → { mesh, material } for visual feedback highlighting */
+  const keyMeshRefs = useRef<Map<number, { mesh: THREE.Mesh; mat: THREE.MeshStandardMaterial }>>(new Map());
+  /** The key currently glowing/active during autonomous playback */
+  const activeKeyIdRef = useRef<number | null>(null);
+  /** Accumulated time for pulse animation */
+  const pulseTimeRef = useRef<number>(0);
+
+  /** Original emissive intensities stored per key for reset */
+  const originalEmissiveIntensityRef = useRef<Map<number, number>>(new Map());
 
   const { initializeJoints, state, setIKTarget, updateJointAngle } = useArmState();
 
@@ -126,6 +142,19 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ urdfPath, urdfContent
     // Animation loop
     const animate = () => {
       animFrameRef.current = requestAnimationFrame(animate);
+
+      // Pulse the active key's emissive intensity
+      if (activeKeyIdRef.current !== null) {
+        const entry = keyMeshRefs.current.get(activeKeyIdRef.current);
+        if (entry) {
+          const t = pulseTimeRef.current;
+          // Smooth sine pulse: 0.2 → 0.8 → 0.2
+          const pulse = 0.3 + 0.7 * (0.5 + 0.5 * Math.sin(t * 5));
+          entry.mat.emissiveIntensity = pulse;
+        }
+      }
+      pulseTimeRef.current += 0.016; // ~60fps
+
       controls.update();
       renderer.render(scene, camera);
     };
@@ -250,6 +279,8 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ urdfPath, urdfContent
           mesh.position.set(x, y, z);
           mesh.castShadow = true;
           mesh.userData = { keyId: keyNum, label: id };
+          keyMeshRefs.current.set(keyNum, { mesh, mat });
+          originalEmissiveIntensityRef.current.set(keyNum, mat.emissiveIntensity);
           panelGroup.add(mesh);
 
           // Small label sprite
@@ -579,6 +610,56 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ urdfPath, urdfContent
     });
   }, [getEEPosition, getEEOrientation, applyAnglesDirect, readAngles]);
 
+  /** Reset all test-panel key emissive intensities to their original values */
+  const resetAllKeyEmissive = useCallback(() => {
+    keyMeshRefs.current.forEach(({ mat }, keyId) => {
+      const orig = originalEmissiveIntensityRef.current.get(keyId);
+      if (orig !== undefined) {
+        mat.emissiveIntensity = orig;
+      }
+    });
+  }, []);
+
+  /** Highlight a single key by ID (null/0 to clear). Sets it pulsing via the animation loop. */
+  const highlightKey = useCallback((keyId: number | null) => {
+    // Clear previous key pulse state
+    if (activeKeyIdRef.current !== null) {
+      resetAllKeyEmissive();
+    }
+    activeKeyIdRef.current = keyId;
+    pulseTimeRef.current = 0;
+    if (keyId !== null) {
+      const entry = keyMeshRefs.current.get(keyId);
+      if (entry) {
+        entry.mat.emissiveIntensity = 0.8; // immediate bright highlight
+      }
+    }
+  }, [resetAllKeyEmissive]);
+
+  /** Flash a key green (success) or red (failure) for 400ms, then restore original */
+  const flashKey = useCallback((keyId: number, success: boolean) => {
+    const entry = keyMeshRefs.current.get(keyId);
+    if (!entry) return;
+
+    const orig = originalEmissiveIntensityRef.current.get(keyId) ?? 0;
+    entry.mat.emissive.setHex(success ? 0x22cc66 : 0xcc2244);
+    entry.mat.emissiveIntensity = 1.2;
+    entry.mat.needsUpdate = true;
+
+    setTimeout(() => {
+      // Restore original emissive color and intensity
+      entry.mat.emissive.setHex(keyId === 1 ? 0x4488ff : 0x2266aa);
+      entry.mat.emissiveIntensity = orig;
+      entry.mat.needsUpdate = true;
+    }, 400);
+  }, []);
+
+  /** Clear all key highlights */
+  const clearHighlights = useCallback(() => {
+    activeKeyIdRef.current = null;
+    resetAllKeyEmissive();
+  }, [resetAllKeyEmissive]);
+
   useImperativeHandle(ref, () => ({
     setJointAngle,
     getScene: () => sceneRef.current!,
@@ -587,6 +668,9 @@ const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(({ urdfPath, urdfContent
     getEEOrientation,
     solveIK,
     updateTargetMarker,
+    highlightKey,
+    flashKey,
+    clearHighlights,
   }));
 
   return (

@@ -3,8 +3,11 @@ import { useArmState } from '../context/ArmStateContext';
 import * as THREE from 'three';
 import type { Scene3DHandle } from './Scene3D';
 import { MotionPipeline } from '../motion/MotionPipeline';
+import { AutonomousSequencer } from '../motion/AutonomousSequencer';
+import type { KeyPhase, KeyResult, SequencerStatus } from '../motion/AutonomousSequencer';
 import { useKeyboardControl } from '../hooks/useKeyboardControl';
 import JoystickControl from './JoystickControl';
+import PlaybackPanel from './PlaybackPanel';
 
 /** 6 key poses from key.config.json (base_link frame) */
 const KEY_CONFIG = {
@@ -48,6 +51,39 @@ export default function ControlDashboard({ sceneRef }: { sceneRef: React.RefObje
   const [ikTargetInput, setIkTargetInput] = useState({ x: 0.6, y: 0.3, z: 0.1 });
   const [ikSolverState, setIkSolverState] = useState<{ running: boolean; message: string }>({ running: false, message: '' });
   const [activeKey, setActiveKey] = useState<number | null>(null);
+
+  // ── Autonomous playback state ──────────────────────────
+  const [playbackStatus, setPlaybackStatus] = useState<{
+    status: 'idle' | 'running' | 'aborted' | 'complete';
+    currentKeyIndex: number;
+    phase: KeyPhase;
+    results: readonly KeyResult[];
+  }>({
+    status: 'idle',
+    currentKeyIndex: -1,
+    phase: 'idle',
+    results: [],
+  });
+
+  // ── Build autonomous sequencer (depends on pipeline) ───
+  const sequencer = useMemo(() => {
+    if (!pipeline) return null;
+    const scene = sceneRef.current;
+    if (!scene) return null;
+    return new AutonomousSequencer({
+      pipeline,
+      scene,
+      keyConfig: KEY_CONFIG,
+      onStatusChange: (event) => {
+        setPlaybackStatus({
+          status: event.status,
+          currentKeyIndex: event.currentKeyIndex,
+          phase: event.phase,
+          results: event.results,
+        });
+      },
+    });
+  }, [pipeline, sceneRef.current]);
 
   /** Solve IK through the motion pipeline */
   const handleSolveIK = () => {
@@ -187,9 +223,21 @@ export default function ControlDashboard({ sceneRef }: { sceneRef: React.RefObje
         >
           IK Mode
         </button>
-        <span className="px-3 py-2 rounded-lg text-xs font-medium bg-surface text-foreground/30 border border-border cursor-not-allowed text-center">
-          Voice
-        </span>
+        <button
+          onClick={() => {
+            setMode('playback');
+            setIkSolverState({ running: false, message: '' });
+            sceneRef.current?.updateTargetMarker(null);
+            pipeline?.cancel();
+          }}
+          className={`px-3 py-2 rounded-lg text-xs font-medium transition-all duration-150 active:scale-[0.97] ${
+            state.mode === 'playback'
+              ? 'bg-primary text-primary-foreground shadow-md'
+              : 'bg-surface text-foreground/70 hover:text-foreground border border-border'
+          }`}
+        >
+          Playback
+        </button>
       </div>
 
       {/* Manual controls — visible in manual mode */}
@@ -371,6 +419,25 @@ export default function ControlDashboard({ sceneRef }: { sceneRef: React.RefObje
               {ikSolverState.message}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Playback Mode — Autonomous PIN Entry */}
+      {state.mode === 'playback' && (
+        <div className="p-4 rounded-xl bg-primary/5 border border-primary/20 space-y-3">
+          <h3 className="text-xs font-heading font-semibold text-foreground flex items-center gap-2">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-primary">
+              <polygon points="5 3 19 12 5 21 5 3" />
+            </svg>
+            Autonomous PIN Entry
+          </h3>
+          <p className="text-[10px] text-foreground/50 leading-relaxed">
+            Enter a 6-digit PIN using keys 1–6, then run the sequence. The arm will autonomously press each key in order.
+          </p>
+          <PlaybackPanel
+            sequencer={sequencer}
+            playbackStatus={playbackStatus}
+          />
         </div>
       )}
 
