@@ -1,0 +1,123 @@
+@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700&display=swap');
+
+@import "tailwindcss";
+
+/* Vantage Robotics — Dark Industrial Dashboard Theme */
+@theme {
+  --font-sans: "Fira Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-heading: "Fira Code", ui-monospace, "SF Mono", monospace;
+  --font-mono: "Fira Code", ui-monospace, "SF Mono", monospace;
+
+  /* Dark mode palette — industrial/engineering aesthetic */
+  --color-primary: oklch(0.5244 0.1809 265.64);
+  --color-on-primary: oklch(1.0 0 0);
+  --color-secondary: oklch(0.6231 0.188 259.81);
+  --color-accent: oklch(0.7458 0.1674 58.32);
+  --color-background: oklch(0.132 0.012 260.0);
+  --color-foreground: oklch(0.9476 0.012 259.82);
+  --color-muted: oklch(0.201 0.018 259.82);
+  --color-border: oklch(0.301 0.0316 255.59);
+  --color-destructive: oklch(0.6371 0.2152 27.33);
+  --color-ring: oklch(0.5244 0.1809 265.64);
+  --color-surface: oklch(0.171 0.014 260.0);
+  --color-success: oklch(0.65 0.18 155.0);
+  --color-warning: oklch(0.7 0.16 58.32);
+  --color-primary-foreground: oklch(1.0 0 0);
+}
+
+/* Base styles */
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-background);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-primary);
+}
+
+/* Glow effects for live indicators */
+.live-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-success);
+  box-shadow: 0 0 6px var(--color-success);
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+@keyframes pulse-glow {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(0.85); }
+}
+
+/* Status badges */
+.badge-active {
+  background: oklch(0.2 0.05 155.0);
+  color: var(--color-success);
+  border: 1px solid var(--color-success);
+}
+
+.badge-idle {
+  background: oklch(0.2 0.02 60.0);
+  color: var(--color-warning);
+  border: 1px solid var(--color-warning);
+}
+
+/* Custom range slider for joint controls */
+.joint-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--color-muted);
+  outline: none;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+.joint-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  border: 2px solid var(--color-background);
+  box-shadow: 0 0 0 1px var(--color-border), 0 2px 4px rgba(0,0,0,0.3);
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+.joint-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+.joint-slider::-webkit-slider-thumb:active {
+  transform: scale(0.95);
+}
+.joint-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  border: 2px solid var(--color-background);
+  box-shadow: 0 0 0 1px var(--color-border), 0 2px 4px rgba(0,0,0,0.3);
+  cursor: pointer;
+}
